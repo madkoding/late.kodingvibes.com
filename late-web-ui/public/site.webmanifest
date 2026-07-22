@@ -1,0 +1,43 @@
+{
+  "name": "late.kodingvibes.com",
+  "short_name": "late",
+  "description": "late.kodingvibes.com — un rinconcito comfy, tarde en la noche.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "orientation": "any",
+  "scope": "/",
+  "lang": "es",
+  "icons": [
+    {
+      "src": "/android-chrome-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable any"
+    },
+    {
+      "src": "/android-chrome-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable any"
+    }
+  ],
+  "categories": ["music", "social", "lifestyle"],
+  "shortcuts": [
+    {
+      "name": "Escuchar radio",
+      "short_name": "Radio",
+      "description": "Abrir el reproductor Icecast",
+      "url": "/icecast",
+      "icons": [{ "src": "/android-chrome-192x192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Ir al chat",
+      "short_name": "Chat",
+      "description": "Abrir el chat de late",
+      "url": "/irc",
+      "icons": [{ "src": "/android-chrome-192x192.png", "sizes": "192x192" }]
+    }
+  ]
+}
