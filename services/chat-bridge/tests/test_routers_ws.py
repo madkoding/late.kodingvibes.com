@@ -74,6 +74,37 @@ class TestChatWs:
         ])
         await chat_ws(ws, token=session_id)
 
+    async def test_ws_snapshot_of_active_voice_room(self, make_session):
+        from routers.ws import chat_ws
+        from services.voice_rooms import voice_rooms
+        _, occupant = make_session("sub-occupant", "occupant@example.com", "Occupant")
+        await voice_rooms.join(occupant["id"], "lobby")
+
+        session_id, user = make_session()
+        ws = AsyncMock()
+        ws.accept = AsyncMock()
+        ws.close = AsyncMock()
+        ws.receive_text = AsyncMock(side_effect=WebSocketDisconnect(code=1000))
+        await chat_ws(ws, token=session_id)
+        calls = [json.loads(c[0][0]) for c in ws.send_text.call_args_list]
+        snapshots = [c for c in calls if c["type"] == "voice.participants"]
+        assert len(snapshots) == 1
+        data = snapshots[0]["data"]
+        assert data["room_id"] == "lobby"
+        assert data["count"] == 1
+        assert data["participants"] == [{"user_id": occupant["id"], "display_name": occupant["display_name"]}]
+
+    async def test_ws_no_snapshot_when_no_active_rooms(self, make_session):
+        from routers.ws import chat_ws
+        session_id, user = make_session()
+        ws = AsyncMock()
+        ws.accept = AsyncMock()
+        ws.close = AsyncMock()
+        ws.receive_text = AsyncMock(side_effect=WebSocketDisconnect(code=1000))
+        await chat_ws(ws, token=session_id)
+        calls = [json.loads(c[0][0]) for c in ws.send_text.call_args_list]
+        assert not any(c["type"] == "voice.participants" for c in calls)
+
     async def test_ws_malformed_json(self, make_session):
         from routers.ws import chat_ws
         session_id, user = make_session()

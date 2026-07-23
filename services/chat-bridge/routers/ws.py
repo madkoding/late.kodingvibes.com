@@ -30,6 +30,15 @@ async def chat_ws(ws: WebSocket, token: str = None):
         await ws_manager.broadcast_online(user_id, True)
     try:
         await ws.send_text(json.dumps({"type": "hello", "user": {"id": user_id, "display_name": session["display_name"]}}))
+        async with voice_rooms.lock:
+            active_room_ids = [rid for rid, members in voice_rooms.rooms.items() if members]
+        for rid in active_room_ids:
+            roster = await voice_rooms.roster(rid)
+            if roster:
+                await ws.send_text(json.dumps({
+                    "type": "voice.participants",
+                    "data": {"room_id": rid, "count": len(roster), "participants": roster},
+                }))
         while True:
             data = await ws.receive_text()
             try:

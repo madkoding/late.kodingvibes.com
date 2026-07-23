@@ -41,15 +41,30 @@ class VoiceRoomManager:
             await self._broadcast_participants(room_id)
 
     async def _broadcast_participants(self, room_id: str):
-        async with self.lock:
-            count = self.participant_count(room_id)
+        participants = await self.roster(room_id)
         async with ws_manager.lock:
             uids = list(ws_manager.connections.keys())
         for uid in uids:
             await ws_manager.send_to_user(uid, {
                 "type": "voice.participants",
-                "data": {"room_id": room_id, "count": count},
+                "data": {"room_id": room_id, "count": len(participants), "participants": participants},
             })
+
+    async def roster(self, room_id: str) -> list[dict]:
+        """Full roster of everyone currently in room_id, for pre-join visibility."""
+        async with self.lock:
+            member_ids = sorted(self.rooms.get(room_id, set()))
+        if not member_ids:
+            return []
+        from core.db import db
+        with db() as conn:
+            placeholders = ",".join("?" for _ in member_ids)
+            rows = conn.execute(
+                f"SELECT id, display_name FROM users WHERE id IN ({placeholders})",
+                member_ids,
+            ).fetchall()
+        by_id = {r["id"]: r["display_name"] for r in rows}
+        return [{"user_id": mid, "display_name": by_id.get(mid, "")} for mid in member_ids]
 
     async def peers(self, user_id: int) -> set[int]:
         async with self.lock:

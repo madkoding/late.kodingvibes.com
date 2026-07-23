@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
-import { MessageSquare, Mic, MicOff, Activity, Plus, Image as ImageIcon, Smile, Music, Video, FileText, ArrowUp, X } from 'lucide-react'
+import { MessageSquare, Mic, MicOff, Activity, Plus, Image as ImageIcon, Smile, Music, Video, FileText, ArrowUp, X, PhoneOff } from 'lucide-react'
 import ParticipantTile from './ParticipantTile'
 import MessageList from './MessageList'
 import TypingIndicator from './TypingIndicator'
@@ -24,13 +24,14 @@ interface VoiceRoomViewProps {
   sendViaWs: (msg: object) => void
   onVoiceMessage: (handler: (type: string, data: any) => void) => () => void
   onSendMessage: (channelId: number, content: string) => void
+  onLeave: () => void
 }
 
 const VAD_THRESHOLD_DEFAULT = 0.05
 
 export default function VoiceRoomView({
   channel, myUserId, myRole, nick, nickMap,
-  sendViaWs, onVoiceMessage, onSendMessage,
+  sendViaWs, onVoiceMessage, onSendMessage, onLeave,
 }: VoiceRoomViewProps) {
   const [localStream, setLocalStream] = useState<MediaStream | null>(null)
   const [showInput, setShowInput] = useState(false)
@@ -216,17 +217,27 @@ export default function VoiceRoomView({
             {totalConnected} conectado{totalConnected !== 1 ? 's' : ''}
           </span>
         </div>
-        <button
-          onClick={() => setShowInput(!showInput)}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-            showInput
-              ? 'bg-indigo-500/15 text-indigo-300'
-              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-          }`}
-        >
-          <MessageSquare className="w-3.5 h-3.5" />
-          {showInput ? 'Cerrar chat' : 'Mensaje'}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowInput(!showInput)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+              showInput
+                ? 'bg-indigo-500/15 text-indigo-300'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+            }`}
+          >
+            <MessageSquare className="w-3.5 h-3.5" />
+            {showInput ? 'Cerrar chat' : 'Mensaje'}
+          </button>
+          <button
+            onClick={onLeave}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 transition-colors"
+            aria-label="Salir de la sala de voz"
+          >
+            <PhoneOff className="w-3.5 h-3.5" />
+            Salir
+          </button>
+        </div>
       </div>
 
       <div className="flex flex-1 min-h-0">

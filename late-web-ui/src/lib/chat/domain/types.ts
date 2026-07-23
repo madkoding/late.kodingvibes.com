@@ -114,6 +114,7 @@ export interface ChannelState {
   memberCount: number
   activeCount: number
   voiceParticipants?: number
+  voiceParticipantNames?: { userId: number; displayName: string }[]
   unread: number
   myRole: string | null
   messages: ChatMessage[]

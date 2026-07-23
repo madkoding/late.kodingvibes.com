@@ -709,6 +709,7 @@ export function Irc() {
       resumeAudioContext().catch(() => {})
     } catch { /* unsupported, getUserMedia will fail next */ }
     setActiveVoiceChannelId(channelId)
+    setShowChannelsDrawer(false)
     // ponytail: load the text-chat history for this voice channel.
     // The /channels list call returns metadata only, never per-channel
     // messages, so without this the chat panel renders empty even if
@@ -950,6 +951,7 @@ export function Irc() {
                 sendViaWs={(msg) => clientRef.current?.sendRaw(msg)}
                 onVoiceMessage={onVoiceMessage}
                 onSendMessage={(chId, content) => clientRef.current?.sendMessage(chId, content).catch(() => {})}
+                onLeave={() => handleVoiceLeave(activeVoiceChannelId!)}
               />
             )
           })() : (

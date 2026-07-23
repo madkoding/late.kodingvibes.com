@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect } from 'react'
 import type { ChannelState, ChannelCategory } from '../../lib/chat/domain/types'
 import ChannelContextMenu, { useChannelContextMenuState } from './ChannelContextMenu'
+import Avatar from './Avatar'
 import { Hash, ChevronDown, ChevronRight, Plus } from 'lucide-react'
 
 interface ChannelListProps {
@@ -148,6 +149,7 @@ export default function ChannelList({
                     const isVoice = chan.channelType === 'voice'
                     const isActive = isVoice ? chan.id === activeVoiceChannelId : chan.name === currentChannel
                     const voiceCount = chan.voiceParticipants ?? 0
+                    const voiceNames = chan.voiceParticipantNames ?? []
 
                     return (
                       <button
@@ -163,7 +165,7 @@ export default function ChannelList({
                           e.preventDefault()
                           setChMenu({ show: true, x: e.clientX, y: e.clientY, channel: chan })
                         }}
-                        className={`w-full flex items-center gap-2 px-3 py-1.5 text-sm transition-all text-left cursor-context-menu ${
+                        className={`w-full flex items-center gap-2 px-3 py-1.5 text-sm transition-all text-left cursor-pointer select-none [-webkit-touch-callout:none] ${
                           isActive
                             ? isVoice
                               ? 'bg-emerald-500/15 text-emerald-200 border-l-2 border-emerald-500'
@@ -181,7 +183,24 @@ export default function ChannelList({
                         <span className="truncate flex-1 font-medium">
                           {chan.name.replace(/^🔊\s*/, '').replace(/^#/, '')}
                         </span>
-                        {isVoice && voiceCount > 0 && (
+                        {isVoice && voiceCount > 0 && voiceNames.length > 0 && (
+                          <span className="flex items-center flex-shrink-0">
+                            {voiceNames.slice(0, 3).map(p => (
+                              <Avatar
+                                key={p.userId}
+                                nick={p.displayName}
+                                size="sm"
+                                className="ring-2 ring-slate-900 -ml-1.5 first:ml-0 w-5 h-5 text-[9px]"
+                              />
+                            ))}
+                            {voiceNames.length > 3 && (
+                              <span className="ml-1 text-[10px] font-medium tabular-nums text-slate-500">
+                                +{voiceNames.length - 3}
+                              </span>
+                            )}
+                          </span>
+                        )}
+                        {isVoice && voiceCount > 0 && voiceNames.length === 0 && (
                           <span className={`text-[10px] font-medium tabular-nums flex items-center gap-1 ${
                             isActive ? 'text-emerald-300' : 'text-slate-500'
                           }`}>
