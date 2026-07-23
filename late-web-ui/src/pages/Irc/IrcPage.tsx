@@ -950,6 +950,7 @@ export function Irc() {
                 sendViaWs={(msg) => clientRef.current?.sendRaw(msg)}
                 onVoiceMessage={onVoiceMessage}
                 onSendMessage={(chId, content) => clientRef.current?.sendMessage(chId, content).catch(() => {})}
+                onLeave={() => handleVoiceLeave(activeVoiceChannelId!)}
               />
             )
           })() : (
