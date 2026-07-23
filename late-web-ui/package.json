@@ -15,9 +15,7 @@
     "coverage:check": "vitest run --coverage --coverage.thresholds.lines=70 --coverage.thresholds.functions=70 --coverage.thresholds.branches=60 --coverage.thresholds.statements=70"
   },
   "dependencies": {
-    "dompurify": "^3.4.12",
     "lucide-react": "^1.25.0",
-    "marked": "^18.0.6",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.28.0"
@@ -32,14 +30,9 @@
     "@vitejs/plugin-react": "^4.3.4",
     "@vitest/coverage-v8": "^4.1.10",
     "jsdom": "^29.1.1",
-    "msw": "^2.15.0",
     "tailwindcss": "^4.0.0",
     "typescript": "^5.6.3",
     "vite": "^5.4.11",
-    "vitest": "^4.1.10",
-    "zustand": "^5.0.14"
-  },
-  "allowScripts": {
-    "msw@2.15.0": true
+    "vitest": "^4.1.10"
   }
 }
