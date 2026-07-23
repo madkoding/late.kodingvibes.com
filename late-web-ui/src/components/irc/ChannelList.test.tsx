@@ -90,4 +90,41 @@ describe('ChannelList', () => {
     expect(button?.className).toContain('select-none')
     expect(button?.className).not.toContain('cursor-context-menu')
   })
+
+  it('shows avatar initials for connected participants on a voice channel row', () => {
+    const props = baseProps()
+    const withRoster: ChannelState = {
+      ...voiceChannel,
+      voiceParticipants: 2,
+      voiceParticipantNames: [
+        { userId: 1, displayName: 'alice' },
+        { userId: 2, displayName: 'bob' },
+      ],
+    }
+    props.channels.set(withRoster.id, withRoster)
+    const { container } = render(<ChannelList {...props} />)
+    expect(within(container).getByText('AL')).toBeTruthy()
+    expect(within(container).getByText('BO')).toBeTruthy()
+  })
+
+  it('renders a +N overflow chip when more than 3 participants are connected', () => {
+    const props = baseProps()
+    const withRoster: ChannelState = {
+      ...voiceChannel,
+      voiceParticipants: 5,
+      voiceParticipantNames: [
+        { userId: 1, displayName: 'alice' },
+        { userId: 2, displayName: 'bob' },
+        { userId: 3, displayName: 'carol' },
+        { userId: 4, displayName: 'dave' },
+        { userId: 5, displayName: 'erin' },
+      ],
+    }
+    props.channels.set(withRoster.id, withRoster)
+    const { container } = render(<ChannelList {...props} />)
+    expect(within(container).getByText('+2')).toBeTruthy()
+    // only the first 3 avatars render
+    expect(within(container).queryByText('DA')).toBeNull()
+    expect(within(container).queryByText('ER')).toBeNull()
+  })
 })

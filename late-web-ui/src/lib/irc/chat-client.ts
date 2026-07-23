@@ -268,9 +268,15 @@ export class ChatClient {
         this.emitMessage(chatMsg)
       }],
       ['voice.participants', (msg) => {
-        const data = msg.data as { room_id: string; count: number }
+        const data = msg.data as { room_id: string; count: number; participants?: { user_id: number; display_name: string }[] }
         const ch = this.channels.get(Number(data.room_id))
-        if (ch) { ch.voiceParticipants = data.count; this.emitState({ channels: new Map(this.channels) }) }
+        if (ch) {
+          ch.voiceParticipants = data.count
+          if (Array.isArray(data.participants)) {
+            ch.voiceParticipantNames = data.participants.map(p => ({ userId: p.user_id, displayName: p.display_name }))
+          }
+          this.emitState({ channels: new Map(this.channels) })
+        }
       }],
       ['presence.online', (msg) => {
         const data = msg.data as { user_id: number; online: boolean }

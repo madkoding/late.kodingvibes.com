@@ -4,6 +4,7 @@ from schemas.chat import CreateChannelRequest, UpdateChannelRequest, InviteReque
 from repositories.channels import list_channels, get_channel, create_channel, update_channel, join_channel, leave_channel, is_member
 from repositories.users import search_users
 from services.notifications import send_to_kv
+from services.voice_rooms import voice_rooms
 from core.db import db
 import asyncio
 
@@ -11,7 +12,11 @@ router = APIRouter()
 
 @router.get("/api/chat/channels")
 async def list_channels_route(session: dict = Depends(get_session_user)):
-    return list_channels(session["user_id"])
+    channels = list_channels(session["user_id"])
+    for ch in channels:
+        if ch["channel_type"] == "voice":
+            ch["voice_participants"] = voice_rooms.participant_count(ch["id"])
+    return channels
 
 @router.post("/api/chat/channels")
 async def create_channel_route(req: CreateChannelRequest, session: dict = Depends(get_session_user)):

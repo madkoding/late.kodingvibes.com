@@ -11,6 +11,24 @@ class TestListChannels:
         names = [c["name"] for c in data]
         assert "#lobby" in names
 
+    async def test_voice_participants_reflects_live_room(self, client, auth_headers):
+        from services.voice_rooms import voice_rooms
+        headers, user = auth_headers
+        channels = (await client.get("/api/chat/channels", headers=headers)).json()
+        voice_ch = next(c for c in channels if c["channel_type"] == "voice")
+        assert voice_ch["voice_participants"] == 0
+
+        voice_rooms.rooms.clear()
+        voice_rooms.user_room.clear()
+        try:
+            await voice_rooms.join(user["id"], str(voice_ch["id"]))
+            channels = (await client.get("/api/chat/channels", headers=headers)).json()
+            voice_ch = next(c for c in channels if c["channel_type"] == "voice" and c["id"] == voice_ch["id"])
+            assert voice_ch["voice_participants"] == 1
+        finally:
+            voice_rooms.rooms.clear()
+            voice_rooms.user_room.clear()
+
 
 class TestCreateChannel:
     async def test_create(self, client, auth_headers):
