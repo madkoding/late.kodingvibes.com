@@ -10,22 +10,47 @@ class ConnectionManager:
         self.connections: dict[int, set] = {}
         self.lock = asyncio.Lock()
 
-    async def connect(self, user_id: int, ws):
+    async def connect(self, user_id: int, ws, channel_ids: list[int] | None = None):
         async with self.lock:
             self.connections.setdefault(user_id, set()).add(ws)
+        if channel_ids:
+            await self.broadcast_to_channel_members_for(channel_ids, {
+                "type": "presence.join",
+                "data": {"user_id": user_id, "channel_ids": channel_ids},
+            }, exclude={user_id})
 
-    async def disconnect(self, user_id: int, ws):
+    async def disconnect(self, user_id: int, ws, channel_ids: list[int] | None = None):
         async with self.lock:
             if user_id in self.connections:
                 self.connections[user_id].discard(ws)
                 if not self.connections[user_id]:
                     del self.connections[user_id]
+        if channel_ids and not self.is_online(user_id):
+            await self.broadcast_to_channel_members_for(channel_ids, {
+                "type": "presence.leave",
+                "data": {"user_id": user_id, "channel_ids": channel_ids},
+            })
 
     async def broadcast_to_channel_members(self, channel_id: int, message: dict, exclude: set[int] | None = None):
         from core.db import db
         with db() as conn:
             members = conn.execute(
                 "SELECT user_id FROM channel_members WHERE channel_id = ?", (channel_id,)
+            ).fetchall()
+        for m in members:
+            if exclude and m["user_id"] in exclude:
+                continue
+            await self.send_to_user(m["user_id"], message)
+
+    async def broadcast_to_channel_members_for(self, channel_ids: list[int], message: dict, exclude: set[int] | None = None):
+        from core.db import db
+        if not channel_ids:
+            return
+        with db() as conn:
+            placeholders = ",".join("?" for _ in channel_ids)
+            members = conn.execute(
+                f"SELECT DISTINCT user_id FROM channel_members WHERE channel_id IN ({placeholders})",
+                channel_ids,
             ).fetchall()
         for m in members:
             if exclude and m["user_id"] in exclude:

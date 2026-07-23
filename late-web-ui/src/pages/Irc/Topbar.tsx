@@ -5,6 +5,7 @@ import type { ChannelState } from '@/lib/chat/domain/types'
 interface TopbarProps {
   currentChan: ChannelState | undefined
   userCount: number
+  globalOnlineCount: number
   nick: string
   connected: boolean
   showUsersDrawer: boolean
@@ -14,7 +15,7 @@ interface TopbarProps {
   onChangeNick: () => void
 }
 
-export function Topbar({ currentChan, userCount, nick, connected, showUsersDrawer, onToggleUsers, onOpenSettings, onOpenChannels, onChangeNick }: TopbarProps) {
+export function Topbar({ currentChan, userCount, globalOnlineCount, nick, connected, showUsersDrawer, onToggleUsers, onOpenSettings, onOpenChannels, onChangeNick }: TopbarProps) {
   return (
     <>
       <div className="hidden sm:flex flex-shrink-0 bg-slate-900/60 border-b border-slate-800 px-3 sm:px-4 h-10 items-center justify-between z-20">
@@ -29,8 +30,8 @@ export function Topbar({ currentChan, userCount, nick, connected, showUsersDrawe
             </span>
           )}
           {userCount > 0 && (
-            <span className="text-xs text-slate-500 flex-shrink-0 hidden lg:inline">
-              · {userCount}
+            <span className="text-xs text-slate-500 flex-shrink-0 hidden lg:inline" title="Usuarios en línea en este canal">
+              · {userCount} en este canal
             </span>
           )}
         </div>
@@ -43,6 +44,12 @@ export function Topbar({ currentChan, userCount, nick, connected, showUsersDrawe
           >
             <SettingsIcon className="w-4 h-4" />
           </button>
+          <span
+            className="text-xs text-slate-500 flex-shrink-0 hidden md:inline"
+            title="Usuarios en línea en todos tus canales"
+          >
+            {globalOnlineCount} en línea
+          </span>
           <ConnectionStatus connected={connected} nick={nick} onChangeNick={onChangeNick} />
           <button
             onClick={onToggleUsers}
@@ -52,6 +59,7 @@ export function Topbar({ currentChan, userCount, nick, connected, showUsersDrawe
                 : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
             }`}
             aria-label="Ver usuarios"
+            title="Usuarios en línea en este canal"
           >
             <Users className="w-4 h-4" />
             <span className="text-xs tabular-nums">{userCount}</span>
@@ -97,6 +105,7 @@ export function Topbar({ currentChan, userCount, nick, connected, showUsersDrawe
                 : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
             }`}
             aria-label="Ver usuarios"
+            title="Usuarios en línea en este canal"
           >
             <Users className="w-4 h-4" />
             <span className="text-xs tabular-nums">{userCount}</span>

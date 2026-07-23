@@ -1,5 +1,6 @@
 import time
 from core.db import db
+from services.broadcaster import ws_manager
 
 
 def list_channels(user_id: int) -> list[dict]:
@@ -8,18 +9,21 @@ def list_channels(user_id: int) -> list[dict]:
         rows = conn.execute("""
             SELECT c.*,
                 (SELECT COUNT(*) FROM channel_members WHERE channel_id = c.id) AS member_count,
-                (SELECT COUNT(*) FROM channel_members cm
-                    JOIN users u ON u.id = cm.user_id
-                    WHERE cm.channel_id = c.id AND u.last_seen > ?) AS active_count,
                 (SELECT id FROM messages WHERE channel_id = c.id ORDER BY id DESC LIMIT 1) AS last_message_id,
                 (SELECT content FROM messages WHERE channel_id = c.id ORDER BY id DESC LIMIT 1) AS last_message_content,
                 (SELECT created_at FROM messages WHERE channel_id = c.id ORDER BY id DESC LIMIT 1) AS last_message_at
             FROM channels c
             WHERE c.id IN (SELECT channel_id FROM channel_members WHERE user_id = ?)
             ORDER BY c.name
-        """, (int(time.time()) - 300, user_id)).fetchall()
+        """, (user_id,)).fetchall()
         channels = []
         for r in rows:
+            member_uids = [
+                m["user_id"] for m in conn.execute(
+                    "SELECT user_id FROM channel_members WHERE channel_id = ?", (r["id"],)
+                ).fetchall()
+            ]
+            active_count = sum(1 for uid in member_uids if ws_manager.is_online(uid))
             read_id = conn.execute(
                 "SELECT last_read_message_id FROM channel_members WHERE channel_id = ? AND user_id = ?",
                 (r["id"], user_id),
@@ -45,7 +49,7 @@ def list_channels(user_id: int) -> list[dict]:
                 "category_id": r["category_id"],
                 "position": r["position"],
                 "member_count": r["member_count"],
-                "active_count": r["active_count"],
+                "active_count": active_count,
                 "voice_participants": 0,
                 "unread": unread,
                 "my_role": my_role["role"] if my_role else None,

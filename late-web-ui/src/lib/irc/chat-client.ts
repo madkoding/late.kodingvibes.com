@@ -272,7 +272,24 @@ export class ChatClient {
         const ch = this.channels.get(Number(data.room_id))
         if (ch) { ch.voiceParticipants = data.count; this.emitState({ channels: new Map(this.channels) }) }
       }],
+      ['presence.join', (msg) => {
+        const data = msg.data as { user_id: number; channel_ids: number[] }
+        this.applyPresence(data.user_id, data.channel_ids, true)
+      }],
+      ['presence.leave', (msg) => {
+        const data = msg.data as { user_id: number; channel_ids: number[] }
+        this.applyPresence(data.user_id, data.channel_ids, false)
+      }],
     ])
+  }
+
+  /** Re-fetch the channels list and the members of the current channel
+   *  so the active flag and activeCount reflect the join/leave without
+   *  trusting a local delta. The server is the only source of truth. */
+  private applyPresence(_userId: number, _channelIds: number[], _active: boolean) {
+    void this.refreshChannels().catch(() => {})
+    const cur = this.currentChannelId
+    if (cur !== null) void this.loadMembers(cur).catch(() => {})
   }
 
   async start(): Promise<void> {

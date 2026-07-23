@@ -120,7 +120,7 @@ export function Irc() {
     return v ? Number(v) : null;
   });
   const currentChan = currentChannel !== null ? channels.get(currentChannel) : null;
-  const [toasts, setToasts] = useState<{ id: string; text: string; type: string }[]>([]);
+  const [toasts, setToasts] = useState<{ id: string; text: string; type: string; sticky: boolean }[]>([]);
   const toastTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const clientRef = useRef<ChatClient | null>(null);
   const messageInputRef = useRef<{ focus: () => void; insertText: (text: string) => void } | null>(null);
@@ -170,17 +170,22 @@ export function Irc() {
   useEffect(() => {
     const onVisible = () => {
       if (document.visibilityState !== 'visible') return
-      const c = clientRef.current
-      if (!c) return
-      c.refreshChannels().catch(() => {})
+      refreshOnline.current()
     }
     document.addEventListener('visibilitychange', onVisible)
     window.addEventListener('focus', onVisible)
     window.addEventListener('pageshow', onVisible)
+    // 30s poll while tab is visible — keeps the active list honest
+    // in quiet channels where no message ever fires scheduleOnlineRefresh.
+    const tick = () => {
+      if (document.visibilityState === 'visible') refreshOnline.current()
+    }
+    const id = setInterval(tick, 30000)
     return () => {
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('focus', onVisible)
       window.removeEventListener('pageshow', onVisible)
+      clearInterval(id)
     }
   }, [])
 
@@ -273,18 +278,21 @@ export function Irc() {
           return next
         })
         const prefs = notifPrefsRef.current
-        const toast = formatToast(msg, myUserIdRef.current, nickRef.current)
+        const ch = channelsRef.current.get(msg.channel_id)
+        const channelName = ch?.name
+        const toast = formatToast(msg, myUserIdRef.current, nickRef.current, channelName)
         if (prefs.mode === 'all') {
-          pushToast(`${msg.display_name}: ${msg.content.slice(0, 80)}`, 'join')
+          const where = channelName ? ` en ${channelName}` : ''
+          pushToast(`${msg.display_name}${where}: ${msg.content.slice(0, 80)}`, 'join')
         } else if (prefs.mode === 'mentions' && toast?.type === 'mention') {
-          pushToast(toast.text, toast.type)
+          pushToast(toast.text, toast.type, { sticky: true })
           if (prefs.sound) playMentionBeep()
         } else if (prefs.mode === 'mentions' && toast) {
-          pushToast(toast.text, toast.type)
+          pushToast(toast.text, toast.type, { sticky: true })
         }
         if (toast?.type === 'mention' && document.hidden && prefs.system) {
           showSystemNotification(
-            `${msg.display_name} te mencionó en #${(channelsRef.current.get(msg.channel_id)?.name || '').replace(/^#/, '')}`,
+            `${msg.display_name} te mencionó en #${(channelName || '').replace(/^#/, '')}`,
             msg.content,
           )
         }
@@ -314,7 +322,10 @@ export function Irc() {
           navigator.vibrate([200, 100, 200, 100, 200])
         }
         if (!isMine) {
-          pushToast(`🔔 ${data.from_display_name} te está zumbando`, 'mention')
+          const ch = channelsRef.current.get(data.channel_id)
+          const chName = ch?.name ? ch.name.replace(/^#/, '') : null
+          const where = chName ? ` en #${chName}` : ''
+          pushToast(`🔔 ${data.from_display_name} te está zumbando${where}`, 'mention', { autoCloseMs: 15000 })
         }
       })
       client.onMemberMuted((data) => {
@@ -468,13 +479,16 @@ export function Irc() {
     }
   }, [])
 
-  const pushToast = useCallback((text: string, type: string) => {
+  const pushToast = useCallback((text: string, type: string, opts?: { sticky?: boolean; autoCloseMs?: number }) => {
     const id = crypto.randomUUID()
-    setToasts(prev => [...prev.slice(-4), { id, text, type }])
+    const sticky = opts?.sticky ?? false
+    setToasts(prev => [...prev.slice(-4), { id, text, type, sticky }])
+    if (sticky) return
+    const ms = opts?.autoCloseMs ?? 6500
     const timer = setTimeout(() => {
       setToasts(prev => prev.filter(t => t.id !== id))
       toastTimers.current.delete(id)
-    }, 6500)
+    }, ms)
     toastTimers.current.set(id, timer)
   }, [])
 
@@ -759,7 +773,19 @@ export function Irc() {
     }
     return out
   }, [typing, nickMap, currentChannel])
-  const userCount = currentChan?.activeCount ?? currentChan?.memberCount ?? 0
+  const channelUserCount = currentChan?.activeCount ?? currentChan?.memberCount ?? 0
+  // Global online count across every channel the current user can see.
+  // We sum unique user_ids whose `active` flag is true in each channel's
+  // member list. Members we don't have yet (members not loaded) are
+  // skipped; the periodic refresh fills them in.
+  const onlineUserIds = useMemo(() => {
+    const s = new Set<number>()
+    for (const ch of channels.values()) {
+      if (!ch.members) continue
+      for (const m of ch.members) if (m.active) s.add(m.id)
+    }
+    return s
+  }, [channels])
 
   if (chatError) {
     return (
@@ -867,7 +893,8 @@ export function Irc() {
 
       <Topbar
         currentChan={currentChan ?? undefined}
-        userCount={userCount}
+        userCount={channelUserCount}
+        globalOnlineCount={onlineUserIds.size}
         nick={nick}
         connected={connected}
         showUsersDrawer={showUsersDrawer}
@@ -1054,34 +1081,43 @@ export function Irc() {
           )}
           {toasts.length > 0 && (
             <div className="absolute top-2 right-3 z-50 flex flex-col items-end gap-2 max-w-md pointer-events-auto">
-              {toasts.map(t => (
-                <div
-                  key={t.id}
-                  onClick={() => {
-                    setToasts(prev => prev.filter(x => x.id !== t.id))
-                    const timer = toastTimers.current.get(t.id)
-                    if (timer) { clearTimeout(timer); toastTimers.current.delete(t.id) }
-                  }}
-                  className={`flex items-start gap-3 px-5 py-3 rounded-xl text-sm font-medium shadow-floating border backdrop-blur-sm cursor-pointer transition-all hover:scale-[1.02] hover:-translate-x-0.5 animate-slide-in-from-top ${
-                    t.type === 'mention'
-                      ? 'bg-indigo-900/95 border-indigo-500/40 text-indigo-200 hover:border-indigo-400/70'
-                      : t.type === 'join'
-                      ? 'bg-emerald-900/95 border-emerald-500/30 text-emerald-200 hover:border-emerald-400/70'
-                      : 'bg-rose-900/95 border-rose-500/30 text-rose-200 hover:border-rose-400/70'
-                  }`}
-                >
-                  <span className="flex-1 break-words leading-snug">{t.text}</span>
-                  <button
-                    type="button"
-                    className="text-slate-500 hover:text-slate-200 flex-shrink-0 -mr-1"
-                    aria-label="Cerrar"
+              {toasts.map(t => {
+                const dismiss = () => {
+                  setToasts(prev => prev.filter(x => x.id !== t.id))
+                  const timer = toastTimers.current.get(t.id)
+                  if (timer) { clearTimeout(timer); toastTimers.current.delete(t.id) }
+                }
+                return (
+                  <div
+                    key={t.id}
+                    onClick={t.sticky ? undefined : dismiss}
+                    role={t.sticky ? 'alert' : 'status'}
+                    className={`flex items-start gap-3 px-5 py-3 rounded-xl text-sm font-medium shadow-floating border backdrop-blur-sm transition-all animate-slide-in-from-top ${
+                      t.sticky
+                        ? 'cursor-default'
+                        : 'cursor-pointer hover:scale-[1.02] hover:-translate-x-0.5'
+                    } ${
+                      t.type === 'mention'
+                        ? 'bg-indigo-900/95 border-indigo-500/40 text-indigo-200 hover:border-indigo-400/70'
+                        : t.type === 'join'
+                        ? 'bg-emerald-900/95 border-emerald-500/30 text-emerald-200 hover:border-emerald-400/70'
+                        : 'bg-rose-900/95 border-rose-500/30 text-rose-200 hover:border-rose-400/70'
+                    }`}
                   >
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M18 6L6 18M6 6l12 12" />
-                    </svg>
-                  </button>
-                </div>
-              ))}
+                    <span className="flex-1 break-words leading-snug">{t.text}</span>
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); dismiss() }}
+                      className="text-slate-500 hover:text-slate-200 flex-shrink-0 -mr-1 cursor-pointer"
+                      aria-label="Cerrar"
+                    >
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M18 6L6 18M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+                )
+              })}
             </div>
           )}
         </main>
@@ -1094,9 +1130,9 @@ export function Irc() {
                   <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
                     Usuarios en línea
                   </h3>
-                  <span className="text-[10px] text-slate-500 tabular-nums">
-                    {currentChan?.members?.filter(m => m.active).length ?? 0}/{currentChan?.members?.length ?? 0}
-                  </span>
+          <span className="text-[10px] text-slate-500 tabular-nums">
+            {currentChan?.members?.filter(m => m.active).length ?? 0} en línea · {currentChan?.members?.length ?? 0} en el canal
+          </span>
                   <button
                     onClick={() => setShowUsersDrawer(false)}
                     className="text-slate-500 hover:text-slate-300 transition-colors p-1 -mr-1"
@@ -1156,7 +1192,7 @@ export function Irc() {
             Usuarios en línea
           </h3>
           <span className="text-[10px] text-slate-500 tabular-nums">
-            {currentChan?.members?.filter(m => m.active).length ?? 0}/{currentChan?.members?.length ?? 0}
+            {currentChan?.members?.filter(m => m.active).length ?? 0} en línea · {currentChan?.members?.length ?? 0} en el canal
           </span>
         </div>
         <UserList

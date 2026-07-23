@@ -1,5 +1,6 @@
 import time
 from core.db import db
+from services.broadcaster import ws_manager
 
 
 def list_members(channel_id: int) -> list[dict]:
@@ -10,12 +11,11 @@ def list_members(channel_id: int) -> list[dict]:
             "WHERE cm.channel_id = ? ORDER BY u.last_seen DESC, u.display_name",
             (channel_id,),
         ).fetchall()
-    now = int(time.time())
     return [{
         "id": r["id"],
         "display_name": r["display_name"],
         "email": r["email"],
-        "active": r["last_seen"] > now - 300,
+        "active": ws_manager.is_online(r["id"]),
         "role": r["role"],
         "muted": bool(r["muted"]),
     } for r in rows]
