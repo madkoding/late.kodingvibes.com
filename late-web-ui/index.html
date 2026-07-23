@@ -45,6 +45,19 @@
     <link rel="apple-touch-icon" href="/android-chrome-192x192.png" sizes="192x192" type="image/png" />
 
     <title>late.kodingvibes.com — un rinconcito comfy, tarde en la noche</title>
+
+    <!-- Microfronts share a single React instance via the import map. -->
+    <!-- The vendor is built by scripts/extract-vendor.sh and lives at /vendor/vendor.js. -->
+    <script type="importmap">
+    {
+      "imports": {
+        "react":              "/vendor/vendor.js",
+        "react/jsx-runtime":  "/vendor/vendor.js",
+        "react-dom":          "/vendor/vendor.js",
+        "react-dom/client":   "/vendor/vendor.js"
+      }
+    }
+    </script>
   </head>
   <body class="h-full bg-slate-950 text-slate-100">
     <div id="root" class="h-full"></div>
