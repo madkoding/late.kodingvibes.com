@@ -163,7 +163,7 @@ export default function ChannelList({
                           e.preventDefault()
                           setChMenu({ show: true, x: e.clientX, y: e.clientY, channel: chan })
                         }}
-                        className={`w-full flex items-center gap-2 px-3 py-1.5 text-sm transition-all text-left cursor-context-menu ${
+                        className={`w-full flex items-center gap-2 px-3 py-1.5 text-sm transition-all text-left cursor-pointer select-none [-webkit-touch-callout:none] ${
                           isActive
                             ? isVoice
                               ? 'bg-emerald-500/15 text-emerald-200 border-l-2 border-emerald-500'
