@@ -93,6 +93,24 @@ def _run_migrations(conn):
             is_collapsed INTEGER NOT NULL DEFAULT 0,
             created_at INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS message_delivered (
+            message_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            delivered_at INTEGER NOT NULL,
+            PRIMARY KEY (message_id, user_id),
+            FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_message_delivered_msg ON message_delivered(message_id);
+        CREATE TABLE IF NOT EXISTS message_reads (
+            message_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            read_at INTEGER NOT NULL,
+            PRIMARY KEY (message_id, user_id),
+            FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_message_reads_msg ON message_reads(message_id);
     """)
     _run_idempotent_alter(conn, "channel_members", "role", "TEXT")
     _run_idempotent_alter(conn, "messages", "reply_to", "INTEGER REFERENCES messages(id) ON DELETE SET NULL")

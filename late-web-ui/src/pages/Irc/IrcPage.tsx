@@ -144,6 +144,12 @@ export function Irc() {
   useEffect(() => { tokenInvalidRef.current = tokenInvalid }, [tokenInvalid])
 
   useEffect(() => {
+    if (!tokenInvalid) return
+    debugLog('auth', 'tokenInvalid -> fullSignOut()')
+    fullSignOut()
+  }, [tokenInvalid])
+
+  useEffect(() => {
     const tick = () => {
       setTyping(prev => {
         const now = Date.now()

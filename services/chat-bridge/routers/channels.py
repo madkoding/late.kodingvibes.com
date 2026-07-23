@@ -2,11 +2,14 @@ from fastapi import APIRouter, Depends, HTTPException
 from core.auth import get_session_user
 from schemas.chat import CreateChannelRequest, UpdateChannelRequest, InviteRequest
 from repositories.channels import list_channels, get_channel, create_channel, update_channel, join_channel, leave_channel, is_member
+from repositories.receipts import mark_read
 from repositories.users import search_users
 from services.notifications import send_to_kv
 from services.voice_rooms import voice_rooms
+from services.broadcaster import ws_manager
 from core.db import db
 import asyncio
+import time
 
 router = APIRouter()
 
@@ -93,4 +96,35 @@ async def mark_read(channel_id: int, message_id: int, session: dict = Depends(ge
             "UPDATE channel_members SET last_read_message_id = MAX(last_read_message_id, ?) WHERE channel_id = ? AND user_id = ?",
             (message_id, channel_id, session["user_id"]),
         )
+    # Ponytail: receipts — any message with id <= message_id that the
+    # user didn't read yet just got read now. We mark them in bulk so
+    # a scroll that lands the user 50 messages ahead doesn't fire 50
+    # individual events. Then broadcast ONE summary event back to
+    # the channel so every sender's UI flips to the blue double-check
+    # in a single state update.
+    newly_read = []
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT id FROM messages WHERE channel_id = ? AND id <= ? AND user_id != ?",
+            (channel_id, message_id, session["user_id"]),
+        ).fetchall()
+        now = int(time.time())
+        for r in rows:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO message_reads (message_id, user_id, read_at) VALUES (?, ?, ?) RETURNING read_at",
+                (r["id"], session["user_id"], now),
+            )
+            if cur.fetchone():
+                newly_read.append(r["id"])
+    if newly_read:
+        await ws_manager.broadcast_to_channel_members(channel_id, {
+            "type": "message_read",
+            "data": {
+                "channel_id": channel_id,
+                "user_id": session["user_id"],
+                "display_name": session["display_name"],
+                "message_ids": newly_read,
+                "read_at": int(time.time()),
+            },
+        }, exclude={session["user_id"]})
     return {"ok": True}

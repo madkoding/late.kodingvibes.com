@@ -4,6 +4,7 @@ import { AudioProvider } from "@/audio/AudioProvider";
 import { TrackMetadataSync } from "@/audio/TrackMetadataSync";
 import Home from "@/pages/Home";
 import SiteHeader from "@/components/SiteHeader";
+import { UpdateNotice } from "@/components/UpdateNotice";
 import useViewportHeight from "@/lib/use-viewport-height";
 
 const Icecast = lazy(() => import("@/pages/Icecast/IcecastPage").then((m) => ({ default: m.Icecast })));
@@ -37,6 +38,7 @@ export function App() {
           </Routes>
         </Suspense>
       </BrowserRouter>
+      <UpdateNotice />
     </AudioProvider>
   );
 }

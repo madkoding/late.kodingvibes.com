@@ -2,6 +2,30 @@ import json
 import time
 import re
 from core.db import db
+from repositories import receipts as receipts_repo
+
+
+def _attach_receipts(msgs: list[dict]) -> None:
+    """In-place: for each message, set `delivered_count`, `read_count`,
+    and `member_count` (denominator for "all read"). The sender is
+    excluded from the denominator — they never count toward their own
+    message's read/delivered tally. """
+    if not msgs:
+        return
+    msg_ids = [m["id"] for m in msgs]
+    channel_ids = list({m["channel_id"] for m in msgs})
+    counts = receipts_repo.receipt_counts(msg_ids)
+    members = receipts_repo.member_count_for_channels(channel_ids)
+    for m in msgs:
+        c = counts.get(m["id"], {"delivered": 0, "read": 0})
+        m["delivered_count"] = c["delivered"]
+        m["read_count"] = c["read"]
+        # Denominator: total members in the channel minus the sender
+        # (whose own message obviously doesn't count toward its own
+        # "read by all" tally). min(..., 0) guards channels with one
+        # member, where the bubble just shows a single check forever.
+        denom = max(0, members.get(m["channel_id"], 0) - 1)
+        m["member_count"] = denom
 
 
 def send_message(channel_id: int, user_id: int, content: str, is_action: bool = False, reply_to: int | None = None) -> dict:
@@ -91,6 +115,7 @@ def send_message(channel_id: int, user_id: int, content: str, is_action: bool = 
         msg["reactions"] = []
         msg["hidden"] = False
         msg["forwarded_from"] = None
+    _attach_receipts([msg])
     return msg
 
 
@@ -156,6 +181,7 @@ def list_messages(channel_id: int, before: int | None = None, limit: int = 50) -
                             m["reply_to_content"] = rt_content[:200]
                         m["reply_to_author"] = rt["display_name"]
                         m["reply_to_user_id"] = rt["id"]
+    _attach_receipts(msgs)
     return msgs
 
 
@@ -308,4 +334,5 @@ def forward_message(orig_id: int, target_channel_id: int, user_id: int) -> dict:
             "user_id": orig["user_id"],
             "display_name": orig["display_name"],
         }
+    _attach_receipts([new_msg])
     return new_msg

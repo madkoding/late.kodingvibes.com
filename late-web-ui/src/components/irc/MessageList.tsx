@@ -68,6 +68,62 @@ function formatTime(ts: number): string {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
+/** ponytail: WhatsApp-style receipt indicator for the sender's own
+ *  bubbles. Three states, matching the familiar UX:
+ *    ⏱  sent only, not yet delivered to anyone (member_count == 0
+ *       means the sender is alone, so we just show ✓).
+ *    ✓   delivered to at least one recipient, nobody read it yet.
+ *    ✓✓  read by every recipient (read_count >= member_count).
+ *  Color flips to indigo for "all read" so it stands out without
+ *  being loud. The indicator is tiny and right-aligned next to
+ *  the timestamp, so it never competes with the bubble content. */
+function ReceiptIndicator({ delivered, read, total }: { delivered: number; read: number; total: number }) {
+  if (total === 0) {
+    // Sender is the only member — show a single check, nothing to wait for.
+    return (
+      <span className="inline-flex items-center text-slate-400 ml-1" aria-label="Enviado" title="Enviado">
+        <CheckIcon />
+      </span>
+    )
+  }
+  if (read >= total) {
+    return (
+      <span className="inline-flex items-center text-indigo-400 ml-1" aria-label="Leído por todos" title="Leído por todos">
+        <CheckDoubleIcon />
+      </span>
+    )
+  }
+  if (delivered > 0) {
+    return (
+      <span className="inline-flex items-center text-slate-400 ml-1" aria-label="Entregado" title="Entregado">
+        <CheckDoubleIcon />
+      </span>
+    )
+  }
+  return (
+    <span className="inline-flex items-center text-slate-500 ml-1" aria-label="Enviado" title="Enviado">
+      <CheckIcon />
+    </span>
+  )
+}
+
+function CheckIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M5 12l5 5 9-9" />
+    </svg>
+  )
+}
+
+function CheckDoubleIcon() {
+  return (
+    <svg width="16" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M2 12l4 4 6-6" />
+      <path d="M12 14l4 4 6-6" />
+    </svg>
+  )
+}
+
 function formatDayLabel(ts: number): string {
   const d = new Date(ts)
   const today = new Date()
@@ -192,8 +248,9 @@ function ContentBlock({ message, members, isOwn, onVideoFloat, onVideoPlay, onVi
   return <RichText text={m.content} members={members} isOwn={isOwn} />
 }
 
-function ActionRow({ m, nick, handleTouchStart, clearTouchTimer, onContextMenu }: {
-  m: ChatMessage; nick: string; handleTouchStart: (e: React.TouchEvent) => void
+function ActionRow({ m, nick, isOwn, handleTouchStart, clearTouchTimer, onContextMenu }: {
+  m: ChatMessage; nick: string; isOwn: boolean
+  handleTouchStart: (e: React.TouchEvent) => void
   clearTouchTimer: () => void; onContextMenu?: (msg: ChatMessage, x: number, y: number) => void
 }) {
   return (
@@ -221,6 +278,13 @@ function ActionRow({ m, nick, handleTouchStart, clearTouchTimer, onContextMenu }
             )}{' '}
           </span>
           {'*'}
+          {isOwn && (
+            <ReceiptIndicator
+              delivered={m.delivered_count ?? 0}
+              read={m.read_count ?? 0}
+              total={m.member_count ?? 0}
+            />
+          )}
         </div>
       </div>
     </div>
@@ -288,8 +352,15 @@ function ImageRow({ m, nick, isOwn, showHeader, handleTouchStart, clearTouchTime
             />
           )}
         </div>
-        <span className="text-[10px] text-slate-500 tabular-nums mt-0.5 px-1 opacity-100 sm:opacity-0 sm:group-hover/msg:opacity-100">
-          {formatTime(m.created_at * 1000)}
+        <span className="text-[10px] text-slate-500 tabular-nums mt-0.5 px-1 opacity-100 sm:opacity-0 sm:group-hover/msg:opacity-100 inline-flex items-center gap-1">
+          <span>{formatTime(m.created_at * 1000)}</span>
+          {isOwn && (
+            <ReceiptIndicator
+              delivered={m.delivered_count ?? 0}
+              read={m.read_count ?? 0}
+              total={m.member_count ?? 0}
+            />
+          )}
         </span>
       </div>
     </div>
@@ -361,8 +432,15 @@ function BubbleMessage({ m, nick, isOwn, showHeader, isNew, members, nickByUserI
             <LazyMount minHeight={80}><LinkPreview key={`og-${m.id}`} og={m.og_data} onOpen={onLinkOpen} /></LazyMount>
           </div>
         )}
-        <span className="text-[10px] text-slate-500 tabular-nums mt-0.5 px-1 opacity-100 sm:opacity-0 sm:group-hover/msg:opacity-100">
-          {formatTime(m.created_at * 1000)}
+        <span className="text-[10px] text-slate-500 tabular-nums mt-0.5 px-1 opacity-100 sm:opacity-0 sm:group-hover/msg:opacity-100 inline-flex items-center gap-1">
+          <span>{formatTime(m.created_at * 1000)}</span>
+          {isOwn && (
+            <ReceiptIndicator
+              delivered={m.delivered_count ?? 0}
+              read={m.read_count ?? 0}
+              total={m.member_count ?? 0}
+            />
+          )}
         </span>
       </div>
     </div>
@@ -411,7 +489,7 @@ function MessageRow({
   const isImage = hasImageMarker(m.content)
 
   if (isAction) {
-    return <ActionRow m={m} nick={nick} handleTouchStart={handleTouchStart} clearTouchTimer={clearTouchTimer} onContextMenu={onContextMenu} />
+    return <ActionRow m={m} nick={nick} isOwn={isOwn} handleTouchStart={handleTouchStart} clearTouchTimer={clearTouchTimer} onContextMenu={onContextMenu} />
   }
 
   if (isImage && onImageOpen) {

@@ -4,6 +4,7 @@ from core.auth import get_session_user
 from schemas.chat import SendMessageRequest, ForwardRequest
 from repositories.messages import send_message, list_messages, hide_message, delete_message, get_message, forward_message
 from repositories.channels import is_member
+from repositories.receipts import mark_delivered
 from services.broadcaster import ws_manager
 from services.notifications import send_to_kv
 from core.db import db
@@ -110,6 +111,32 @@ async def send_message_route(channel_id: int, req: SendMessageRequest, session: 
     msg = send_message(channel_id, session["user_id"], content, is_action, req.reply_to)
     payload = {"type": "message", "data": msg}
     await ws_manager.broadcast_to_channel_members(channel_id, payload, exclude={session["user_id"]})
+    # Ponytail: receipts — anyone with a live WS at send time counts as
+    # "delivered" (the message left our server to their socket). We
+    # record the rows here so the checkmark survives a sender reload,
+    # and broadcast a message_delivered event back so any other
+    # session of the sender (e.g. the web app open in another tab)
+    # flips its bubble from "sent" to "delivered" without waiting
+    # for a full refetch.
+    delivered_to: list[int] = []
+    with db() as conn:
+        member_ids = [
+            r["user_id"] for r in conn.execute(
+                "SELECT user_id FROM channel_members WHERE channel_id = ?",
+                (channel_id,),
+            ).fetchall()
+        ]
+    online_members = [uid for uid in member_ids if uid != session["user_id"] and ws_manager.is_online(uid)]
+    delivered_to = mark_delivered(msg["id"], online_members)
+    if delivered_to:
+        await ws_manager.broadcast_to_channel_members(channel_id, {
+            "type": "message_delivered",
+            "data": {
+                "message_id": msg["id"],
+                "channel_id": channel_id,
+                "user_ids": delivered_to,
+            },
+        }, exclude=set())
     asyncio.create_task(send_to_kv("message.new", {**msg}))
     urls = extract_urls(content)
     if urls and not is_action:
@@ -185,6 +212,24 @@ async def forward_message_route(message_id: int, req: ForwardRequest, session: d
     new_msg = forward_message(message_id, req.target_channel_id, session["user_id"])
     payload = {"type": "message", "data": new_msg}
     await ws_manager.broadcast_to_channel_members(req.target_channel_id, payload, exclude={session["user_id"]})
+    with db() as conn:
+        member_ids = [
+            r["user_id"] for r in conn.execute(
+                "SELECT user_id FROM channel_members WHERE channel_id = ?",
+                (req.target_channel_id,),
+            ).fetchall()
+        ]
+    online_members = [uid for uid in member_ids if uid != session["user_id"] and ws_manager.is_online(uid)]
+    delivered_to = mark_delivered(new_msg["id"], online_members)
+    if delivered_to:
+        await ws_manager.broadcast_to_channel_members(req.target_channel_id, {
+            "type": "message_delivered",
+            "data": {
+                "message_id": new_msg["id"],
+                "channel_id": req.target_channel_id,
+                "user_ids": delivered_to,
+            },
+        }, exclude=set())
     asyncio.create_task(send_to_kv("message.new", {**new_msg}))
     urls = extract_urls(new_msg.get("content", ""))
     if urls:

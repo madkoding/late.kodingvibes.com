@@ -282,6 +282,21 @@ export class ChatClient {
         const data = msg.data as { user_id: number; online: boolean }
         this.applyPresence(data.user_id, data.online)
       }],
+      // ponytail: read-receipts WS events. Server fires these when
+      // a recipient opens a channel (message_read) or comes online
+      // and receives a queued message (message_delivered). We bump
+      // the per-message counters so the sender's bubble flips from
+      // "sent" → "delivered" → "all read" without a refetch.
+      ['message_delivered', (msg) => {
+        const data = msg.data as { message_id: number; channel_id: number; user_ids: number[] }
+        if (!data.user_ids || data.user_ids.length === 0) return
+        this.bumpDelivered(data.channel_id, data.message_id, data.user_ids.length)
+      }],
+      ['message_read', (msg) => {
+        const data = msg.data as { channel_id: number; user_id: number; display_name: string; message_ids: number[]; read_at: number }
+        if (!data.message_ids || data.message_ids.length === 0) return
+        this.bumpRead(data.channel_id, data.message_ids, data.user_id)
+      }],
     ])
   }
 
@@ -303,6 +318,39 @@ export class ChatClient {
       }
     }
     if (changed) this.emitState({ channels: new Map(this.channels) })
+  }
+
+  /** ponytail: bump `delivered_count` on the matching message. Adds
+   *  to the existing count rather than overwriting because the
+   *  server hands us only the newly-delivered user_ids in each
+   *  event. Idempotent on missing/unloaded messages. */
+  private bumpDelivered(channelId: number, messageId: number, addedCount: number) {
+    const ch = this.channels.get(channelId)
+    if (!ch) return
+    const idx = ch.messages.findIndex(m => m.id === messageId)
+    if (idx < 0) return
+    const cur = ch.messages[idx]
+    const next = { ...cur, delivered_count: (cur.delivered_count ?? 0) + addedCount }
+    const newMessages = ch.messages.slice()
+    newMessages[idx] = next
+    this.channels.set(ch.id, { ...ch, messages: newMessages })
+    this.emitState({ channels: new Map(this.channels) })
+  }
+
+  /** ponytail: bump `read_count` on each message_id by 1, since the
+   *  server's message_read event carries one (user, message) pair
+   *  per broadcast. We track names from the event so the sender's
+   *  UI can later show "Seen by X" if we want to extend this. */
+  private bumpRead(channelId: number, messageIds: number[], _userId: number) {
+    const ch = this.channels.get(channelId)
+    if (!ch) return
+    const idSet = new Set(messageIds)
+    const newMessages = ch.messages.map(m => {
+      if (!idSet.has(m.id)) return m
+      return { ...m, read_count: (m.read_count ?? 0) + 1 }
+    })
+    this.channels.set(ch.id, { ...ch, messages: newMessages })
+    this.emitState({ channels: new Map(this.channels) })
   }
 
   async start(): Promise<void> {
@@ -595,6 +643,12 @@ export class ChatClient {
         reply_to_user_id: replyTarget?.user_id ?? null,
         created_at: Math.floor(Date.now() / 1000),
         reactions: [],
+        // ponytail: receipt counters start at 0 — the real response
+        // from the server fills them in (and the subsequent
+        // message_delivered event bumps `delivered_count`).
+        delivered_count: 0,
+        read_count: 0,
+        member_count: ch.memberCount ? Math.max(0, ch.memberCount - 1) : 0,
       }
       const newMessages = ch.messages.slice()
       newMessages.push(optimistic)

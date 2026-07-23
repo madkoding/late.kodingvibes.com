@@ -30,6 +30,13 @@ export interface ChatMessage {
   reply_to_user_id?: number | null
   hidden?: boolean
   forwarded_from?: ForwardedFrom | null
+  // Read-receipt counters (sender's bubble only). `member_count`
+  // is the channel's member count minus the sender — the denominator
+  // for "all read". 0 means the sender is alone in the channel and
+  // the bubble shows a single check forever.
+  delivered_count?: number
+  read_count?: number
+  member_count?: number
 }
 
 export interface AttachmentMeta {
