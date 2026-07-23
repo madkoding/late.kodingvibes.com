@@ -8,13 +8,22 @@ export function UpdateNotice() {
 
   useEffect(() => {
     let cancelled = false
+    let bc: BroadcastChannel | null = null
+    try {
+      bc = new BroadcastChannel('late-update')
+      bc.onmessage = (e) => { if (e.data === 'outdated') setStatus('outdated') }
+    } catch {}
     const check = async () => {
       try {
         const res = await fetch('/version.json', { cache: 'no-store' })
         if (!res.ok) return
         const data = (await res.json()) as { version?: string }
         if (cancelled || !data.version) return
-        setStatus(data.version === APP_VERSION ? 'current' : 'outdated')
+        const next: Status = data.version === APP_VERSION ? 'current' : 'outdated'
+        setStatus(next)
+        if (next === 'outdated') {
+          try { new BroadcastChannel('late-update').postMessage('outdated') } catch {}
+        }
       } catch {
         // ponytail: network blips are fine, retry on next tick
       }
@@ -29,6 +38,7 @@ export function UpdateNotice() {
       cancelled = true
       clearInterval(t)
       document.removeEventListener('visibilitychange', onVisible)
+      bc?.close()
     }
   }, [])
 
