@@ -1,6 +1,6 @@
 # late.kodingvibes.com
 
-[![Version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmadkoding%2Flate.kodingvibes.com%2Fmain%2Flate-web-ui%2Fsrc%2Flib%2Fversion.ts&query=%24.APP_VERSION&label=app&color=%23111)]()
+[![Version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fkodingvibes%2Flate.kodingvibes.com%2Fmain%2Flate-web-ui%2Fsrc%2Flib%2Fversion.ts&query=%24.APP_VERSION&label=app&color=%23111)]()
 [![License](https://img.shields.io/badge/license-MIT-111?style=flat)]()
 [![Icecast](https://img.shields.io/badge/icecast-2.4-111?style=flat)]()
 

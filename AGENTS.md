@@ -1,18 +1,42 @@
 # late.kodingvibes.com — Global Context for LLM Agents
 
 ## Project
-- **Repo root:** `.` — Solo React SPA (late-web-ui) + Icecast streaming infra
+- **Repo root:** `.` — React shell (late-web-ui) + 2 microfront repos (radio, chat) + Icecast streaming infra
 - **Domain:** https://late.kodingvibes.com
-- **Github:** `git@github.com:madkoding/late.kodingvibes.com.git` (origin/main)
-- **Local path:** `/root/late.kodingvibes.com`
+- **Github:** `git@github.com:kodingvibes/late.kodingvibes.com.git` (origin/main)
+- **Local paths:**
+  - Shell:    `/root/late.kodingvibes.com`
+  - Radio:    `/root/late-micro-radio`
+  - Chat:     `/root/late-micro-chat`
+
+## Topology (v1.30.0+)
+
+```
+late.kodingvibes.com/                (this repo, the shell)
+├── late-web-ui/                    React shell (header, nav, MiniPlayer, Home)
+├── scripts/                        Build scripts (radio/chat/vendor + soma relays)
+├── infra/icecast/                  Icecast config
+└── services/chat-bridge/           chat-bridge (FastAPI, port 9100)
+
+/root/late-micro-radio/              Repo independiente (Fase 2+: la radio completa)
+   vite lib → /var/www/html/micro/radio/vX.Y.Z/entry.js + style.css
+
+/root/late-micro-chat/               Repo independiente (Fase 3+: el chat completo)
+   vite lib → /var/www/html/micro/chat/vX.Y.Z/entry.js + style.css
+
+/var/www/html/vendor/vendor.js       React+ReactDOM bundleado (compartido shell+micros)
+```
 
 ## Infrastructure Running on This Host (production)
 
 | Service | Port | Notes |
 |---------|------|-------|
 | Icecast | 8000 | Docker container, config at `infra/icecast/icecast.xml` |
-| nginx (host) | 80/443 | Proxies SPA → Vite dev server `:5173`, proxies streams → Icecast `:8000` |
-| Vite (systemd, inactive) | 5173 | Dev server for code review; prod serves from /var/www/html/ (nginx reads static files directly) |
+| nginx (host) | 80/443 | Static files + proxies streams → Icecast `:8000`, chat-bridge `:9100` |
+| Vite (systemd, inactive) | 5173 | Dev server (inactive in prod; prod serves `/var/www/html/` static) |
+| chat-bridge (Docker) | 9100 | REST + WebSocket. JWT verified via `SSO_BRIDGE_SECRET` (must match Vercel prod env). |
+| late-micro-radio | (CDN) | Bundle ESM en `/micro/radio/vX.Y.Z/entry.js`. Posee `<audio>`, `AudioContext`, `AnalyserNode`. |
+| late-micro-chat | (CDN) | Bundle ESM en `/micro/chat/vX.Y.Z/entry.js`. Posee voice rooms + WebSocket. |
 
 ### SomaFM Relays (18 channels)
 - ffmpeg relays running via `scripts/soma_relay_one.sh` (started by `scripts/start_soma_relays.sh`)
@@ -41,66 +65,94 @@
 - `/etc/nginx/sites-enabled/late.kodingvibes.com`
 - Routes stream mount names (regex) → `127.0.0.1:8000` (Icecast)
 - Routes `/status` → `127.0.0.1:8000` (Icecast status)
-- Proxies SPA → `127.0.0.1:5173` (Vite dev server)
-- Cache-Control: `immutable, 1 year` for `/assets/*` and `/fonts/*`
+- Routes `/api/chat/` → `127.0.0.1:9100` (chat-bridge)
+- Serves static files from `/var/www/html/` (shell, micros, vendor, icons, fonts)
+- Cache-Control: `immutable, 1 year` for `/assets/*`, `/fonts/*`, `/micro/*`, `/vendor/*`
 - Cache-Control: `1 day` for root static assets (favicon, og-image, icons)
 - Cache-Control: `no-cache` for `index.html`
 
-### Removed / Disabled
+## Web UI (React) — Three Pieces
+
+### 1. Shell (`late-web-ui`, this repo)
+- **Source:** `late-web-ui/src/` — currently: header, nav, `Home.tsx`, `MiniPlayer.tsx` (consume `window.RadioEngine`).
+- **Routes:** `/` (Home), `/icecast` (renders `<div id="micro-radio-root" />`), `/irc` (renders `<div id="micro-chat-root" />`).
+- **Served by:** nginx directly from `/var/www/html/`. `vite-spa.service` is **inactive** in production.
+- **CRITICAL — build + copy after EVERY frontend change:** see **Deploy checklist** below.
+- **Typecheck only (faster sanity check before build):** `cd late-web-ui && npm run lint`
+- **Versioning:** bump `APP_VERSION` in `late-web-ui/src/lib/version.ts` for EVERY change (feature or fix). It renders as a pill next to the site name in the header, so a hard-reload after deploy tells you at a glance whether the new bundle is live. Current: **v1.34.0**.
+- **Dependencies:** `react`, `react-dom`, `react-router-dom`, `lucide-react`. The shell does NOT need `marked`, `dompurify`, `zustand`, `msw` — those live in the micros now.
+
+### 2. late-micro-radio (`/root/late-micro-radio`, separate repo)
+- **Stack:** Vite + React 18 + Tailwind 4, `build.lib` ESM with React externalized (resolved at runtime via the import map).
+- **Owns:** `<audio>` element, `AudioContext`, `AnalyserNode`. Singleton lives in `window.RadioEngine`.
+- **Mounts in:** `<div id="micro-radio-root">` (placed by the shell on `/icecast`).
+- **Streams list:** 18 SomaFM channels in `src/data/streams.ts`.
+- **UI:** `src/pages/Icecast/IcecastPage.tsx` with `MountCard` + `useIcecastStatus` (polls `/status-json.xsl` for listeners + metadata).
+- **Metadata push:** `IcecastPage` calls `window.RadioEngine.setTrack({artist, title, raw})` on every status tick so the shell's MiniPlayer updates mid-play.
+- **Build:** `bash scripts/build-micro-radio.sh` (rebuilds, rsyncs to `/var/www/html/micro/radio/vX.Y.Z/`). Current: **v0.1.0**.
+- **Deploy checklist (after radio change):**
+  1. Bump `version` in `/root/late-micro-radio/package.json`.
+  2. Update `MICRO_RADIO_VERSION` constant in `late-web-ui/vite.config.ts` (the microfrontsPlugin).
+  3. `bash scripts/build-micro-radio.sh` — bundle goes to `/var/www/html/micro/radio/vX.Y.Z/`.
+  4. `cd late-web-ui && npm run build && cp -r dist/. /var/www/html/ && nginx -s reload` — shell re-emits the new `<script src>`.
+
+### 3. late-micro-chat (`/root/late-micro-chat`, separate repo)
+- **Stack:** Vite + React 18 + Tailwind 4, lib ESM.
+- **Owns:** chat-bridge WebSocket client, voice rooms (uses `window.RadioEngine.getAnalyser()` for visualizers).
+- **Mounts in:** `<div id="micro-chat-root">` (placed by the shell on `/irc`).
+- **UI:** `src/pages/Irc/IrcPage.tsx` + 30+ components in `src/components/irc/`. WebRTC voice rooms in `src/voice/`. Domain types in `src/lib/chat/`.
+- **Build:** `bash scripts/build-micro-chat.sh`. Current: **v0.1.0**.
+- **Deploy checklist (after chat change):** same pattern as radio.
+
+### Shared React vendor
+- `scripts/extract-vendor.sh` bundles React + ReactDOM + react-dom/client into a single `/var/www/html/vendor/vendor.js` (~200KB).
+- `late-web-ui/index.html` registers an import map that points `react`, `react/jsx-runtime`, `react-dom`, `react-dom/client` → `/vendor/vendor.js`.
+- The shell + both micros all resolve React through the import map. **One React instance in the page** — no broken hooks / refs across microfronts.
+
+## Versioning (microfronts)
+- Each micro has its own `version` field in `package.json`.
+- The shell hardcodes the path (`/micro/radio/v1.27.0/entry.js`) in `vite.config.ts` (`MICRO_RADIO_VERSION` / `MICRO_CHAT_VERSION`).
+- Bump shell's `MICRO_RADIO_VERSION` constant + redeploy shell to pick up a new micro build. This is intentional — see Phase 5 plan in AGENTS.md-history for the `latest.json` dynamic upgrade option (deferred).
+
+## Deploy checklist (mandatory after EVERY change, no exceptions)
+1. Bump the relevant version: `APP_VERSION` (shell) or `version` (micro package.json).
+2. If micro changed: update `MICRO_*_VERSION` in `late-web-ui/vite.config.ts`.
+3. `bash scripts/extract-vendor.sh` if React/ReactDOM versions bumped (uncommon).
+4. `bash scripts/build-micro-{radio,chat}.sh` for each micro that changed.
+5. `cd late-web-ui && npm run build && rm -rf /var/www/html/assets /var/www/html/index.html && cp -r dist/. /var/www/html/ && nginx -s reload`
+6. If chat-bridge changed: `bash /root/restart-chat-bridge.sh`
+7. If Icecast config changed: `docker restart icecast`
+8. If relay scripts changed: `bash scripts/start_soma_relays.sh` and/or restart metadata relay
+
+## Commands (run from repo root)
+- **Build & deploy shell:** `cd late-web-ui && npm run build && rm -rf /var/www/html/assets /var/www/html/index.html && cp -r dist/. /var/www/html/ && nginx -s reload`
+- **Build & deploy radio:** `bash scripts/build-micro-radio.sh`
+- **Build & deploy chat:** `bash scripts/build-micro-chat.sh`
+- **Rebuild vendor:** `bash scripts/extract-vendor.sh`
+- **Typecheck shell:** `cd late-web-ui && npm run lint`
+- **Restart icecast:** `docker restart icecast`
+- **Restart ffmpeg relays:** `bash scripts/start_soma_relays.sh`
+- **Restart metadata relay:** `pkill -f soma_metadata_relay; python3 scripts/soma_metadata_relay.py > /tmp/soma_metadata_relay.log 2>&1 &`
+- **Check Icecast status:** `curl -s http://127.0.0.1:8000/status-json.xsl | python3 -m json.tool`
+- **Check all 18 channels have metadata:** `curl -s http://127.0.0.1:8000/status-json.xsl | python3 -c "import json,sys;d=json.load(sys.stdin);[print(s.get('listenurl','').split('/')[-1],repr(s.get('title',''))) for s in (d['icestats']['source'] if isinstance(d['icestats']['source'],list) else [d['icestats']['source']])]"`
+
+## Removed / Disabled
 - **late-ssh** (Rust API, port 4001): killed, code removed.
 - **late-core, late-cli, late-web, late-nethack:** all removed from repo.
 - **Postgres, Registry, Liquidsoap, LiveKit:** Docker containers stopped and removed.
-- **Web pages:** Dashboard, Play, Gallery, Profiles, Connect — removed from React router. Only `/icecast` and `/irc` remain.
+- **Web pages:** Dashboard, Play, Gallery, Profiles, Connect — removed from React router. Only `/`, `/icecast`, and `/irc` remain.
 - **sso-bridge** (`services/sso-bridge/`): IRC-era token issuer (aud: late.sh), code deleted.
 - **Ergo IRC stack** (`infra/irc/`, `var-lib-ergo/`, `scripts/irc_bootstrap.py`): dead, deleted.
 - **infra K8s docs** (`infra/README.md`, `.env.example`, `.gitignore`): deleted.
 - **late-web-ui:prod** Docker image: removed (82MB). Prod serves static files via nginx.
 - **sso-bridge:latest** Docker image: removed (212MB).
+- **late-ssh assets** (`late-ssh/assets/nonograms/.number-loom-validation/`): dead.
 
-## Web UI (React)
-- **Source:** `late-web-ui/src/pages/Icecast.tsx` (and `Irc.tsx` for the chat-bridge client)
-- **Served by:** nginx (host) directly from `/var/www/html/`. The `vite-spa.service` is **inactive** in production — HMR is NOT available.
-- **CRITICAL — build + copy after EVERY frontend change, no exceptions:** see **Deploy checklist** below.
-  We removed the Docker indirection — the host already has node 20+ and `node_modules` is checked into the workflow.
-- **Typecheck only (faster sanity check before build):** `cd late-web-ui && npm run lint`
-- **Versioning:** bump `APP_VERSION` in `late-web-ui/src/lib/version.ts` for EVERY change (feature or fix). It renders as a pill next to the site name in the header, so a hard-reload after deploy tells you at a glance whether the new bundle is live. Current: **v1.24.0**.
-- **Deploy checklist (mandatory after EVERY change, no exceptions):**
-  1. Bump `APP_VERSION` in `late-web-ui/src/lib/version.ts`
-  2. `cd late-web-ui && npm run build`
-  3. `rm -rf /var/www/html/assets /var/www/html/index.html && cp -r dist/. /var/www/html/ && nginx -s reload`
-  4. If chat-bridge changed: `bash /root/restart-chat-bridge.sh`
-  5. If Icecast config changed: `docker restart icecast`
-  6. If relay scripts changed: `bash scripts/start_soma_relays.sh` and/or restart metadata relay
-- **Channels:** 18 entries in `SOURCE_LABELS` constant, each with emoji/color/accent
-- **Metadata:** Fetched directly from `/status-json.xsl` (Icecast status via nginx proxy), parses `title` field as "Artist - Track"
-- **Audio playback:** Uses `<audio>` element pointing to `https://late.kodingvibes.com/{mount}`
-- **Spectrum analyzer:** Web Audio API with AnalyserNode on fftSize=64, drawn on canvas
-- **Icons:** Coffee cup favicon/icon set (coffee.svg, favicon.ico, android-chrome-*.png, apple-touch-icon.png)
+## Migration Plan (DONE — v1.34.0)
 
-## Commands (run from repo root)
-- **Rebuild web UI (mandatory after any frontend change):** `cd late-web-ui && npm run build && rm -rf /var/www/html/assets /var/www/html/index.html && cp -r dist/. /var/www/html/ && nginx -s reload`
-- **Typecheck only (faster, no build):** `cd late-web-ui && npm run lint`
-- Restart icecast: `docker restart icecast`
-- Restart ffmpeg relays: `bash scripts/start_soma_relays.sh`
-- Restart metadata relay: `pkill -f soma_metadata_relay; python3 scripts/soma_metadata_relay.py > /tmp/soma_metadata_relay.log 2>&1 &`
-- Check Icecast status: `curl -s http://127.0.0.1:8000/status-json.xsl | python3 -m json.tool`
-- Check all 18 channels have metadata: `curl -s http://127.0.0.1:8000/status-json.xsl | python3 -c "import json,sys;d=json.load(sys.stdin);[print(s.get('listenurl','').split('/')[-1],repr(s.get('title',''))) for s in (d['icestats']['source'] if isinstance(d['icestats']['source'],list) else [d['icestats']['source']])]"`
-
-## Repo Structure
-```
-./
-├── late-web-ui/          ← React SPA (Icecast player)
-│   ├── src/pages/Icecast.tsx
-│   └── public/           ← Icons, locales, fonts
-├── scripts/              ← Relay scripts (3 files)
-│   ├── soma_relay_one.sh
-│   ├── start_soma_relays.sh
-│   └── soma_metadata_relay.py
-├── infra/icecast/        ← Icecast config
-│   └── icecast.xml
-├── services/             ← Chat-bridge
-│   └── chat-bridge/
-│       └── app.py
-├── .git/
-└── .gitignore
-```
+- **Fase 0 (DONE, v1.30.0):** created the two repos with placeholder UIs, vendor + import map, end-to-end tested in playwright. The shell renders empty `<div id="micro-*-root">` slots on `/icecast` and `/irc`; the micros auto-mount via a `MutationObserver` watching for the slot.
+- **Fase 1 (DONE, v1.31.0):** refactored `MiniPlayer.tsx` to consume `window.RadioEngine` via `useSyncExternalStore`. Dropped the legacy `AudioProvider` and `TrackMetadataSync` from the shell. Added `lib/radio-engine.ts` with `FALLBACK_STREAMS` so the shell renders before the micro loads.
+- **Fase 2 (DONE, v1.32.0):** moved the real Icecast UI (`pages/Icecast/`, `streams.ts`, `RadioEngine.ts`, persistence, etc.) into `late-micro-radio` (v0.1.0). The shell's `pages/Icecast.tsx` is now a 5-line slot. Added `setTrack` to `RadioEngine` for mid-play metadata updates.
+- **Fase 3 (DONE, v1.33.0):** moved the chat (`pages/Irc/`, `components/irc/*`, voice chain, `lib/chat`, `lib/irc`, `lib/{chat-notifs,emoji,image-prep,notification-sound}.ts`) into `late-micro-chat` (v0.1.0). The chat consumes `window.RadioEngine.getAnalyser()` for voice-room visualizers. Replaced the legacy `useAudio()` hook with a direct `window.RadioEngine` shim inside the IrcPage.
+- **Fase 4 (DONE, v1.34.0):** cleaned the shell — `package.json` loses `marked`, `dompurify`, `msw`, `zustand`. Dropped `lib/chat`, `lib/irc`, `voice/`, `components/irc/`, `audio/{AudioProvider,TrackMetadataSync,persistence,presets,voiceChain,audio-engine}.ts`, `hooks/useAudioLevel.ts`. Removed the dev proxy for `/status-json.xsl` (now consumed by the micro). Removed `index.html` import map (micros externalize React via Vite, share the `/vendor/vendor.js`).
+- **Fase 5 (DEFERRED):** `latest.json` to enable dynamic micro upgrades without shell redeploy.
