@@ -60,17 +60,17 @@
 ## Web UI (React)
 - **Source:** `late-web-ui/src/pages/Icecast.tsx` (and `Irc.tsx` for the chat-bridge client)
 - **Served by:** nginx (host) directly from `/var/www/html/`. The `vite-spa.service` is **inactive** in production — HMR is NOT available.
-- **CRITICAL — build + copy after EVERY frontend change, no exceptions:**
-  ```bash
-  cd late-web-ui
-  npm run build
-  rm -rf /var/www/html/assets /var/www/html/index.html
-  cp -r dist/. /var/www/html/
-  nginx -s reload
-  ```
+- **CRITICAL — build + copy after EVERY frontend change, no exceptions:** see **Deploy checklist** below.
   We removed the Docker indirection — the host already has node 20+ and `node_modules` is checked into the workflow.
 - **Typecheck only (faster sanity check before build):** `cd late-web-ui && npm run lint`
-- **Versioning:** bump `APP_VERSION` in `late-web-ui/src/lib/version.ts` for every user-visible change (feature or fix). It renders as a pill next to the site name in the header, so a hard-reload after deploy tells you at a glance whether the new bundle is live. Current: **v1.6.2**.
+- **Versioning:** bump `APP_VERSION` in `late-web-ui/src/lib/version.ts` for EVERY change (feature or fix). It renders as a pill next to the site name in the header, so a hard-reload after deploy tells you at a glance whether the new bundle is live. Current: **v1.24.0**.
+- **Deploy checklist (mandatory after EVERY change, no exceptions):**
+  1. Bump `APP_VERSION` in `late-web-ui/src/lib/version.ts`
+  2. `cd late-web-ui && npm run build`
+  3. `rm -rf /var/www/html/assets /var/www/html/index.html && cp -r dist/. /var/www/html/ && nginx -s reload`
+  4. If chat-bridge changed: `bash /root/restart-chat-bridge.sh`
+  5. If Icecast config changed: `docker restart icecast`
+  6. If relay scripts changed: `bash scripts/start_soma_relays.sh` and/or restart metadata relay
 - **Channels:** 18 entries in `SOURCE_LABELS` constant, each with emoji/color/accent
 - **Metadata:** Fetched directly from `/status-json.xsl` (Icecast status via nginx proxy), parses `title` field as "Artist - Track"
 - **Audio playback:** Uses `<audio>` element pointing to `https://late.kodingvibes.com/{mount}`

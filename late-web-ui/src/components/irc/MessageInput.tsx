@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from 'react'
 import { X, Paperclip, Smile, ArrowUp, Trash2, Image as ImageIcon, FileText, Music, Video, MessageSquareQuote, Upload, Plus, Mic } from 'lucide-react'
-import type { ChannelMember, ChatMessage } from '../../lib/irc/types'
+import type { ChannelMember, ChatMessage } from '../../lib/chat/domain/types'
 import { prepareImageForChat } from '../../lib/image-prep'
-import { hasImageMarker, extractImageUrl } from './ImagePreview'
+import { hasImageMarker, extractImageUrl } from '../../lib/chat/domain/parsers'
 import EmojiPicker from './EmojiPicker'
 import AudioWaveform from './AudioWaveform'
 
@@ -913,7 +913,7 @@ const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(function 
                   ? 'bg-slate-950 border-rose-700/50 focus:border-rose-500 focus:ring-rose-500/30'
                   : 'bg-slate-900 border-slate-700 focus:border-indigo-500 focus:ring-indigo-500/30'
               }`}
-              style={{ minHeight: '40px', maxWidth: '100%', fontSize: '16px' }}
+              style={{ minHeight: '44px', maxWidth: '100%', fontSize: '16px' }}
             />
             {text.length === 0 && !disabled && !recording && (
               <span className="hidden lg:block absolute right-3 bottom-2.5 text-[10px] text-slate-600 pointer-events-none">
@@ -963,7 +963,7 @@ const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(function 
               if (recordingRef.current) cancelRecording()
             }}
             aria-label={canSend ? 'Enviar mensaje' : 'Mantener para grabar audio'}
-            className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 transition-all shadow-sm self-end mb-1 flex-none ${
+            className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 transition-all shadow-sm self-end flex-none ${
               recording
                 ? 'bg-rose-500 hover:bg-rose-400 text-white animate-pulse'
                 : canSend

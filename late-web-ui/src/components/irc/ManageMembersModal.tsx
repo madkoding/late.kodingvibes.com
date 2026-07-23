@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import type { ChannelMember, ChannelState } from '../../lib/irc/types'
+import type { ChannelMember, ChannelState } from '../../lib/chat/domain/types'
 import { Shield, ShieldCheck, Volume2, VolumeX } from 'lucide-react'
 import Avatar from './Avatar'
 import { getNickColor } from '../../lib/irc/colors'

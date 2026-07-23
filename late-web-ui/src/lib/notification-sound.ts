@@ -43,43 +43,47 @@ export function playBuzz(volumeOverride?: number): void {
     ctx.resume().catch(() => { /* ignore */ })
   }
   const vol = volumeOverride !== undefined ? volumeOverride / 100 : currentVolume
-  const now = ctx.currentTime
+  const start = ctx.currentTime
 
-  // Recreates the 003.mp3 notification chime: continuous tone
-  // with fundamental ~200→260 Hz and a 4× harmonic ~800 Hz.
-  const dur = 0.75
-
-  // Fundamental: rising from ~200 Hz to ~260 Hz
-  const osc = ctx.createOscillator()
-  const gain = ctx.createGain()
-  osc.type = 'sine'
-  osc.frequency.setValueAtTime(195, now)
-  osc.frequency.linearRampToValueAtTime(260, now + dur * 0.6)
-  osc.frequency.linearRampToValueAtTime(220, now + dur)
-  gain.gain.setValueAtTime(0, now)
-  gain.gain.linearRampToValueAtTime(0.28 * vol, now + 0.03)
-  gain.gain.linearRampToValueAtTime(0.22 * vol, now + dur * 0.6)
-  gain.gain.exponentialRampToValueAtTime(0.0005, now + dur)
-  osc.connect(gain)
-  gain.connect(ctx.destination)
-  osc.start(now)
-  osc.stop(now + dur + 0.05)
-
-  // 4th harmonic ~780→1040 Hz for the metallic chime character
-  const h2 = ctx.createOscillator()
-  const g2 = ctx.createGain()
-  h2.type = 'sine'
-  h2.frequency.setValueAtTime(780, now)
-  h2.frequency.linearRampToValueAtTime(1040, now + dur * 0.6)
-  h2.frequency.linearRampToValueAtTime(880, now + dur)
-  g2.gain.setValueAtTime(0, now)
-  g2.gain.linearRampToValueAtTime(0.16 * vol, now + 0.025)
-  g2.gain.linearRampToValueAtTime(0.10 * vol, now + dur * 0.5)
-  g2.gain.exponentialRampToValueAtTime(0.0005, now + dur * 0.9)
-  h2.connect(g2)
-  g2.connect(ctx.destination)
-  h2.start(now)
-  h2.stop(now + dur + 0.05)
+  // Do La Do La Do La (C5 A4 C5 A4 C5 A4) over ~2 seconds.
+  // Each note = ~333ms; the next note starts before the previous
+  // fully decays, so they ring into each other like a bell pattern.
+  const notes = [
+    { freq: 523.25, t: 0.00 },
+    { freq: 440.00, t: 0.33 },
+    { freq: 523.25, t: 0.67 },
+    { freq: 440.00, t: 1.00 },
+    { freq: 523.25, t: 1.33 },
+    { freq: 440.00, t: 1.67 },
+  ]
+  const noteLen = 0.45
+  for (const n of notes) {
+    const at = start + n.t
+    // Fundamental
+    const o = ctx.createOscillator()
+    const g = ctx.createGain()
+    o.type = 'sine'
+    o.frequency.setValueAtTime(n.freq, at)
+    g.gain.setValueAtTime(0, at)
+    g.gain.linearRampToValueAtTime(0.28 * vol, at + 0.01)
+    g.gain.exponentialRampToValueAtTime(0.0005, at + noteLen)
+    o.connect(g)
+    g.connect(ctx.destination)
+    o.start(at)
+    o.stop(at + noteLen + 0.02)
+    // 3rd harmonic for bell shimmer
+    const h = ctx.createOscillator()
+    const hg = ctx.createGain()
+    h.type = 'sine'
+    h.frequency.setValueAtTime(n.freq * 3, at)
+    hg.gain.setValueAtTime(0, at)
+    hg.gain.linearRampToValueAtTime(0.10 * vol, at + 0.01)
+    hg.gain.exponentialRampToValueAtTime(0.0005, at + noteLen * 0.6)
+    h.connect(hg)
+    hg.connect(ctx.destination)
+    h.start(at)
+    h.stop(at + noteLen * 0.65)
+  }
 }
 
 export function playMentionBeep(): void {

@@ -141,3 +141,9 @@
 .scrollbar-hide::-webkit-scrollbar {
   display: none;
 }
+
+/* Prevent iOS long-press context menu on chat elements */
+.select-none {
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}

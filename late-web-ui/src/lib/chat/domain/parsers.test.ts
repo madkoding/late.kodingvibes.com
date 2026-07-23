@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseStreamTitle, getAttachmentMarker, hasImageMarker, extractImageUrl, extractImageUrls, extractImageCaption } from './parsers'
+import { parseStreamTitle, getAttachmentMarker, hasImageMarker, extractImageUrl, extractImageUrls, extractImageCaption, extractImagesCaption } from './parsers'
 
 describe('parseStreamTitle', () => {
   it('returns null for empty string', () => {
@@ -64,8 +64,16 @@ describe('getAttachmentMarker', () => {
 })
 
 describe('hasImageMarker', () => {
-  it('returns true for image marker', () => {
+  it('returns true for __late_image__:', () => {
     expect(hasImageMarker('__late_image__:img1')).toBe(true)
+  })
+
+  it('returns true for late_image__: (fallback)', () => {
+    expect(hasImageMarker('late_image__:img1')).toBe(true)
+  })
+
+  it('returns true for __late_images__:', () => {
+    expect(hasImageMarker('__late_images__:["a"]')).toBe(true)
   })
 
   it('returns false for other markers', () => {
@@ -78,32 +86,36 @@ describe('hasImageMarker', () => {
 })
 
 describe('extractImageUrl', () => {
-  it('extracts url from image marker', () => {
+  it('extracts url from __late_image__:', () => {
     expect(extractImageUrl('__late_image__:img123')).toBe('img123')
+  })
+
+  it('extracts url from late_image__: (fallback)', () => {
+    expect(extractImageUrl('late_image__:img123')).toBe('img123')
   })
 
   it('returns null for non-image content', () => {
     expect(extractImageUrl('hello')).toBeNull()
   })
-
-  it('returns first part when multiple parts', () => {
-    expect(extractImageUrl('__late_image__:img1 caption text')).toBe('img1')
-  })
 })
 
 describe('extractImageUrls', () => {
-  it('returns all parts as urls', () => {
-    expect(extractImageUrls('__late_image__:a b c')).toEqual(['a', 'b', 'c'])
+  it('parses JSON array from __late_images__:', () => {
+    expect(extractImageUrls('__late_images__:["a","b","c"]')).toEqual(['a', 'b', 'c'])
   })
 
   it('returns empty array for non-image', () => {
     expect(extractImageUrls('hello')).toEqual([])
   })
+
+  it('returns empty array for malformed JSON', () => {
+    expect(extractImageUrls('__late_images__:not-json')).toEqual([])
+  })
 })
 
 describe('extractImageCaption', () => {
-  it('extracts caption after first url', () => {
-    expect(extractImageCaption('__late_image__:img1 my caption')).toBe('my caption')
+  it('extracts caption before __late_image__:', () => {
+    expect(extractImageCaption('my caption __late_image__:img1')).toBe('my caption ')
   })
 
   it('returns null when no caption', () => {
@@ -112,5 +124,15 @@ describe('extractImageCaption', () => {
 
   it('returns null for non-image', () => {
     expect(extractImageCaption('hello')).toBeNull()
+  })
+})
+
+describe('extractImagesCaption', () => {
+  it('extracts caption before __late_images__:', () => {
+    expect(extractImagesCaption('my caption __late_images__:["a"]')).toBe('my caption ')
+  })
+
+  it('falls back to extractImageCaption for __late_image__:', () => {
+    expect(extractImagesCaption('caption __late_image__:img1')).toBe('caption ')
   })
 })

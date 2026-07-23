@@ -1,4 +1,5 @@
-import type { ChannelState, ChatMessage, UserInfo, ChannelInfo, ChannelMember, AttachmentMeta, ChannelCategory } from './types'
+import type { ChannelState, ChatMessage, UserInfo, ChannelInfo, ChannelMember, AttachmentMeta, ChannelCategory } from '../chat/domain/types'
+import { debugLog, debugError } from '../session-debug'
 
 type StateHandler = (state: Partial<{
   connected: boolean
@@ -119,6 +120,11 @@ export class ChatClient {
 
   sendRaw(msg: object) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      const m = msg as any
+      if (typeof m?.type === 'string' && m.type.startsWith('voice.') && (window as any).__voiceDebug?.enabled) {
+        // eslint-disable-next-line no-console
+        console.log(`[voice ${new Date().toISOString().slice(11, 23)}] ws.send`, m.type, m)
+      }
       this.ws.send(JSON.stringify(msg))
     }
   }
@@ -143,6 +149,7 @@ export class ChatClient {
   private fireAuthFatal() {
     if (this.tokenInvalid) return
     this.tokenInvalid = true
+    debugError('client', 'fireAuthFatal()', { previouslyInvalid: false })
     this.emitState({ connected: false, tokenInvalid: true })
     for (const h of this.authFatalHandlers) {
       try { h() } catch { /* ignore */ }
@@ -208,7 +215,10 @@ export class ChatClient {
         this.trackName(data.user_id, data.display_name)
         for (const h of this.typingHandlers) h(data)
       }],
-      ['buzz', (msg) => { this.emitBuzz(msg.data as BuzzPayload) }],
+      ['buzz', (msg) => {
+        debugLog('buzz', 'WS buzz event received', msg.data)
+        this.emitBuzz(msg.data as BuzzPayload)
+      }],
       ['member_muted', (msg) => {
         this.emitMemberMuted(msg.data as MemberMutedPayload)
         const data = msg.data as MemberMutedPayload
@@ -267,12 +277,15 @@ export class ChatClient {
 
   async start(): Promise<void> {
     try {
+      debugLog('client', 'start() begin', { sessionIdLen: this.sessionId.length })
       // Load profile
       const me = await this.api<UserInfo>('GET', '/api/chat/me')
       this.user = me
+      debugLog('client', 'GET /api/chat/me ok', { id: me.id, email: me.email, display_name: me.display_name })
       this.emitState({ user: this.user })
       // Load channels
       const chans = await this.api<ChannelInfo[]>('GET', '/api/chat/channels')
+      debugLog('client', 'GET /api/chat/channels ok', { count: chans.length })
       this.channels = new Map()
       for (const c of chans) {
         this.channels.set(c.id, {
@@ -298,11 +311,13 @@ export class ChatClient {
       // Connect WS
       this.connectWs()
     } catch (err) {
+      debugError('client', 'start() failed', { message: (err as Error)?.message })
       this.emitState({ connected: false })
       // Any 401 from REST means the session is dead. Mark it
       // fatal so the page redirects to SSO instead of looping
       // through the WS reconnect path with a useless token.
       if (err instanceof Error && /401|unauthor/i.test(err.message)) {
+        debugError('client', 'start() saw 401/unauthor, firing authFatal')
         this.fireAuthFatal()
       }
       throw err
@@ -320,6 +335,7 @@ export class ChatClient {
     })
     if (!res.ok) {
       const detail = await res.json().catch(() => ({}))
+      debugError('api', `${method} ${path} -> ${res.status}`, { detail: detail?.detail || detail })
       throw new Error(detail.detail || `${method} ${path} failed: ${res.status}`)
     }
     return res.json()
@@ -328,12 +344,14 @@ export class ChatClient {
   private connectWs() {
     const host = window.location.host
     const url = `${this.baseUrl}//${host}/api/chat/ws?token=${this.sessionId}`
+    debugLog('ws', 'connecting', { url: url.replace(this.sessionId, '<token>') })
     this.ws = new WebSocket(url)
     this.ws.onopen = () => {
       this.connected = true
       this.reconnectAttempts = 0
       this.firstDisconnectAt = null
       this.emitState({ connected: true })
+      debugLog('ws', 'onopen')
       this.pingInterval = setInterval(() => {
         if (this.ws?.readyState === WebSocket.OPEN) {
           this.ws.send(JSON.stringify({ type: 'ping' }))
@@ -343,6 +361,7 @@ export class ChatClient {
     this.ws.onclose = (ev) => {
       this.connected = false
       this.emitState({ connected: false })
+      debugLog('ws', 'onclose', { code: ev.code, reason: ev.reason, wasClean: ev.wasClean })
       if (this.pingInterval) {
         clearInterval(this.pingInterval)
         this.pingInterval = null
@@ -355,6 +374,7 @@ export class ChatClient {
       //   4001/4401 are common conventions for "unauthorized"
       const fatalCode = ev.code === 1008 || (ev.code >= 4000 && ev.code < 5000)
       if (fatalCode) {
+        debugError('ws', 'fatal close code, fireAuthFatal', { code: ev.code })
         this.fireAuthFatal()
         return
       }
@@ -366,6 +386,35 @@ export class ChatClient {
     this.ws.onmessage = (ev) => {
       try {
         const msg = JSON.parse(ev.data)
+        if (msg.type?.startsWith('voice.') && (window as any).__voiceDebug?.enabled) {
+          // eslint-disable-next-line no-console
+          console.log(`[voice ${new Date().toISOString().slice(11, 23)}] ws.recv`, msg.type, msg.data)
+        }
+        // Track names from voice events so the participant tiles can
+        // resolve the real display name without waiting for a chat
+        // message from that user.
+        let nickMapChanged = false
+        if (msg.type === 'voice.peer_joined' && msg.data?.user_id) {
+          this.trackName(msg.data.user_id, msg.data.display_name)
+          nickMapChanged = true
+        } else if (msg.type === 'voice.peers' && Array.isArray(msg.data?.peers)) {
+          for (const p of msg.data.peers) {
+            if (p && typeof p === 'object' && p.user_id) {
+              this.trackName(p.user_id, p.display_name)
+              nickMapChanged = true
+            }
+          }
+        } else if (msg.type === 'voice.offer' && msg.data?.from_display_name) {
+          this.trackName(msg.data.from, msg.data.from_display_name)
+          nickMapChanged = true
+        } else if (msg.type === 'voice.answer' && msg.data?.from_display_name) {
+          this.trackName(msg.data.from, msg.data.from_display_name)
+          nickMapChanged = true
+        }
+        // The nickByUserId map is a separate ref; the React tree only
+        // re-syncs it on a state emit. Force one so voice-driven name
+        // changes propagate to the participant tiles.
+        if (nickMapChanged) this.emitState({ channels: new Map(this.channels) })
         const handler = this._wsHandlers.get(msg.type)
         if (handler) handler(msg)
         else if (msg.type?.startsWith('voice.')) {
@@ -385,11 +434,13 @@ export class ChatClient {
       // We've been trying for too long. Treat the session as
       // dead and let the page redirect to SSO instead of spinning
       // forever in the background.
+      debugError('ws', 'reconnect window exceeded, fireAuthFatal', { attempts: this.reconnectAttempts })
       this.fireAuthFatal()
       return
     }
     const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), this.maxReconnectDelay)
     this.reconnectAttempts++
+    debugLog('ws', 'scheduleReconnect', { attempt: this.reconnectAttempts, delayMs: delay })
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null
       this.connectWs()
@@ -401,7 +452,12 @@ export class ChatClient {
     if (!ch) return
     // Dedup by id
     if (ch.messages.some(m => m.id === data.id)) return
-    ch.messages.push(data)
+    // Clone the ChannelState so React detects the new messages
+    // reference. Without this, the push mutates the array in
+    // place and the consumer gets the same reference — no re-render.
+    const newMessages = ch.messages.slice()
+    newMessages.push(data)
+    this.channels.set(data.channel_id, { ...ch, messages: newMessages })
     // Track the sender's current display_name. If they later
     // rename, PATCH /api/chat/me will refresh this entry too.
     this.trackName(data.user_id, data.display_name)
@@ -426,24 +482,24 @@ export class ChatClient {
     this.emitMessage(data)
   }
 
-  async loadHistory(channelId: number, before?: number): Promise<ChatMessage[]> {
+  async loadHistory(channelId: number, before?: number, limit = 20): Promise<ChatMessage[]> {
     const path = before
-      ? `/api/chat/channels/${channelId}/messages?before=${before}&limit=50`
-      : `/api/chat/channels/${channelId}/messages?limit=50`
+      ? `/api/chat/channels/${channelId}/messages?before=${before}&limit=${limit}`
+      : `/api/chat/channels/${channelId}/messages?limit=${limit}`
     const msgs = await this.api<ChatMessage[]>('GET', path)
     const ch = this.channels.get(channelId)
     if (ch) {
       const existing = new Set(ch.messages.map(m => m.id))
-      let added = false
+      const toAdd: ChatMessage[] = []
       for (const m of msgs) {
         if (!existing.has(m.id)) {
-          ch.messages.push(m)
-          added = true
+          toAdd.push(m)
         }
         this.trackName(m.user_id, m.display_name)
       }
-      if (added) {
-        ch.messages.sort((a, b) => a.id - b.id)
+      if (toAdd.length > 0) {
+        const merged = ch.messages.concat(toAdd).sort((a, b) => a.id - b.id)
+        this.channels.set(channelId, { ...ch, messages: merged })
         this.emitState({ channels: new Map(this.channels) })
       }
     }
@@ -485,28 +541,95 @@ export class ChatClient {
   }
 
   async sendMessage(channelId: number, content: string, options?: { is_action?: boolean; reply_to?: number }): Promise<void> {
+    const ch = this.channels.get(channelId)
+    const tempId = -Date.now() - Math.floor(Math.random() * 10000)
+    if (ch && this.user) {
+      // Look up the message being replied to so the optimistic
+      // bubble can render the reply preview immediately (the
+      // server only fills reply_to_* on the real response, and
+      // waiting for the round-trip left the cite blank).
+      const replyTarget = options?.reply_to
+        ? ch.messages.find(m => m.id === options.reply_to)
+        : null
+      const optimistic: ChatMessage = {
+        id: tempId,
+        channel_id: channelId,
+        user_id: this.user.id,
+        display_name: this.user.display_name,
+        email: this.user.email,
+        content,
+        is_action: options?.is_action,
+        reply_to: options?.reply_to,
+        reply_to_content: replyTarget?.content ?? null,
+        reply_to_author: replyTarget?.display_name ?? null,
+        reply_to_user_id: replyTarget?.user_id ?? null,
+        created_at: Math.floor(Date.now() / 1000),
+        reactions: [],
+      }
+      const newMessages = ch.messages.slice()
+      newMessages.push(optimistic)
+      this.channels.set(channelId, { ...ch, messages: newMessages })
+      this.emitState({ channels: new Map(this.channels) })
+    }
     const data = await this.api<ChatMessage>('POST', `/api/chat/channels/${channelId}/messages`, {
       content,
       is_action: options?.is_action,
       reply_to: options?.reply_to,
     })
-    // Add to local store (dedup in handleIncoming)
-    this.handleIncoming(data)
-  }
-
-  /**
+    // Replace the optimistic message with the real one
+    if (ch) {
+      const cur = this.channels.get(channelId)
+      if (cur) {
+        const replaced = cur.messages.map(m => m.id === tempId ? data : m)
+        this.channels.set(channelId, { ...cur, messages: replaced })
+        this.emitState({ channels: new Map(this.channels) })
+      }
+    }
+  }  /**
    * Toggle a reaction emoji on a message. The server adds it
    * if missing or removes it if present; the WS broadcast then
    * updates every client with the new full set, so this
    * method's return value is informational only.
    */
   async toggleReaction(messageId: number, emoji: string): Promise<void> {
+    if (!this.user) return
+    const userId = this.user.id
+    // Optimistic flip: find the message, toggle this user's
+    // reaction in the local store, emit state. The WS broadcast
+    // (which includes the sender — the reaction route does NOT
+    // exclude) will reconcile to the server's authoritative list
+    // a moment later. Without this, the chip doesn't appear
+    // until the round-trip completes and the UI feels laggy.
+    for (const ch of this.channels.values()) {
+      const idx = ch.messages.findIndex(m => m.id === messageId)
+      if (idx >= 0) {
+        const current = ch.messages[idx]
+        const existing = (current.reactions ?? []).find(
+          r => r.user_id === userId && r.emoji === emoji
+        )
+        const next = existing
+          ? (current.reactions ?? []).filter(r => !(r.user_id === userId && r.emoji === emoji))
+          : [...(current.reactions ?? []), { user_id: userId, emoji, created_at: Math.floor(Date.now() / 1000) }]
+        const newMessages = ch.messages.slice()
+        newMessages[idx] = { ...current, reactions: next }
+        this.channels.set(ch.id, { ...ch, messages: newMessages })
+        this.emitState({ channels: new Map(this.channels) })
+        break
+      }
+    }
     await this.api('POST', `/api/chat/messages/${messageId}/reactions`, { emoji })
   }
 
   /** Send a buzz (attention signal) to a user in a channel. */
   async buzz(channelId: number, targetUserId: number): Promise<void> {
-    await this.api('POST', '/api/chat/buzz', { channel_id: channelId, target_user_id: targetUserId })
+    debugLog('buzz', 'chat-client.buzz POST', { channelId, targetUserId })
+    try {
+      await this.api('POST', '/api/chat/buzz', { channel_id: channelId, target_user_id: targetUserId })
+      debugLog('buzz', 'chat-client.buzz POST ok', { channelId, targetUserId })
+    } catch (err) {
+      debugError('buzz', 'chat-client.buzz POST failed', { channelId, targetUserId, message: (err as Error).message })
+      throw err
+    }
   }
 
   /** Forward a message to another channel (or the same channel).

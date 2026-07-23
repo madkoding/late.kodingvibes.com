@@ -21,7 +21,6 @@ interface ParticipantTileProps {
   amount?: number
   onRecord?: () => void
   recording?: boolean
-  onLeave?: () => void
 }
 
 export default function ParticipantTile({
@@ -29,7 +28,7 @@ export default function ParticipantTile({
   micOn, speaking, isAdmin,
   volume, locallyMuted,
   onVolumeChange, onLocalMuteToggle, onKick,
-  onMicToggle, onAmountChange, amount, onRecord, recording, onLeave,
+  onMicToggle, onAmountChange, amount, onRecord, recording,
 }: ParticipantTileProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const [showVolume, setShowVolume] = useState(false)
@@ -131,15 +130,7 @@ export default function ParticipantTile({
         <span className="text-xs font-medium text-slate-200 truncate max-w-[90px]">
           {displayName}
         </span>
-        {isSelf && (
-          <span className="text-[9px] text-indigo-400 font-medium">Tú</span>
-        )}
       </div>
-
-      {/* Status */}
-      {!micOn && isSelf && (
-        <span className="text-[9px] text-slate-500">Micrófono apagado</span>
-      )}
 
       {/* Self controls */}
       {isSelf && (
@@ -180,18 +171,6 @@ export default function ParticipantTile({
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <circle cx="12" cy="12" r="6" />
                 <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
-              </svg>
-            </button>
-          )}
-          {onLeave && (
-            <button
-              onClick={onLeave}
-              className="flex items-center justify-center w-7 h-7 rounded-lg text-slate-400 hover:text-rose-300 hover:bg-rose-500/10 transition-colors"
-              title="Salir del canal de voz"
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M18.36 6.64a9 9 0 1 1-12.73 0" />
-                <line x1="12" y1="2" x2="12" y2="12" />
               </svg>
             </button>
           )}

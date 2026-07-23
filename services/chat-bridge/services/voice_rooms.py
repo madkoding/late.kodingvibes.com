@@ -44,11 +44,12 @@ class VoiceRoomManager:
         async with self.lock:
             count = self.participant_count(room_id)
         async with ws_manager.lock:
-            for uid in list(ws_manager.connections.keys()):
-                await ws_manager.send_to_user(uid, {
-                    "type": "voice.participants",
-                    "data": {"room_id": room_id, "count": count},
-                })
+            uids = list(ws_manager.connections.keys())
+        for uid in uids:
+            await ws_manager.send_to_user(uid, {
+                "type": "voice.participants",
+                "data": {"room_id": room_id, "count": count},
+            })
 
     async def peers(self, user_id: int) -> set[int]:
         async with self.lock:
@@ -56,6 +57,27 @@ class VoiceRoomManager:
             if not room_id:
                 return set()
             return {u for u in self.rooms.get(room_id, set()) if u != user_id}
+
+    async def peers_with_names(self, user_id: int) -> list[dict]:
+        """Like peers(), but also returns each peer's display name.
+        Looks up names from the users table so the joiner can label
+        existing peers without having to wait for a peer_joined event."""
+        async with self.lock:
+            room_id = self.user_room.get(user_id)
+            if not room_id:
+                return []
+            peer_ids = [u for u in self.rooms.get(room_id, set()) if u != user_id]
+        if not peer_ids:
+            return []
+        from core.db import db
+        with db() as conn:
+            placeholders = ",".join("?" for _ in peer_ids)
+            rows = conn.execute(
+                f"SELECT id, display_name FROM users WHERE id IN ({placeholders})",
+                peer_ids,
+            ).fetchall()
+        by_id = {r["id"]: r["display_name"] for r in rows}
+        return [{"user_id": pid, "display_name": by_id.get(pid, "")} for pid in peer_ids]
 
     async def broadcast(self, user_id: int, message: dict, exclude_self=True):
         async with self.lock:

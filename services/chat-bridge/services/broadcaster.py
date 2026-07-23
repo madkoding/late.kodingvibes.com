@@ -36,10 +36,16 @@ class ConnectionManager:
         async with self.lock:
             sockets = list(self.connections.get(user_id, []))
         data = json.dumps(message)
-        for ws in sockets:
+        log.info("send_to_user uid=%s sockets=%d", user_id, len(sockets))
+        for i, ws in enumerate(sockets):
             try:
+                log.info("send_to_user uid=%s sock=%d send_start", user_id, i)
                 await ws.send_text(data)
+                log.info("send_to_user uid=%s sock=%d send_ok", user_id, i)
             except Exception as e:
                 log.warning(f"Failed to send to user {user_id}: {e}")
+
+    def is_online(self, user_id: int) -> bool:
+        return user_id in self.connections and len(self.connections[user_id]) > 0
 
 ws_manager = ConnectionManager()

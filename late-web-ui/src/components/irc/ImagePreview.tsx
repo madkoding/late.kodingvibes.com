@@ -83,106 +83,21 @@ interface ImagePreviewProps {
 }
 
 export default function ImagePreview({ dataUrl, onOpen }: ImagePreviewProps) {
-  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null)
-
   return (
-    <>
-      <button
-        onClick={() => onOpen(dataUrl)}
-        onContextMenu={(e) => {
-          e.preventDefault()
-          e.stopPropagation()
-          setCtxMenu({ x: e.clientX, y: e.clientY })
-        }}
-        onTouchStart={(e) => e.stopPropagation()}
-        className="block rounded-lg overflow-hidden border border-slate-700/60 hover:border-indigo-500 transition-colors"
-        aria-label="Abrir imagen"
-      >
-        <img
-          src={dataUrl}
-          alt="imagen pegada"
-          className="block max-w-full max-h-72 object-contain bg-slate-950"
-          loading="lazy"
-          draggable={false}
-        />
-      </button>
-      {ctxMenu && (
-        <ImageContextMenuPortal
-          url={dataUrl}
-          x={ctxMenu.x}
-          y={ctxMenu.y}
-          onClose={() => setCtxMenu(null)}
-        />
-      )}
-    </>
+    <button
+      onClick={() => onOpen(dataUrl)}
+      className="block rounded-lg overflow-hidden border border-slate-700/60 hover:border-indigo-500 transition-colors"
+      aria-label="Abrir imagen"
+    >
+      <img
+        src={dataUrl}
+        alt="imagen pegada"
+        className="block max-w-full max-h-72 object-contain bg-slate-950"
+        loading="lazy"
+        draggable={false}
+      />
+    </button>
   )
-}
-
-const IMAGE_PREFIX = '__late_image__:'
-const IMAGE_PREFIX_FALLBACK = 'late_image__:'
-const IMAGES_PREFIX = '__late_images__:'
-const IMAGES_PREFIX_FALLBACK = 'late_images__:'
-
-const ALL_IMAGE_MARKERS = [IMAGE_PREFIX, IMAGE_PREFIX_FALLBACK, IMAGES_PREFIX, IMAGES_PREFIX_FALLBACK]
-
-export function hasImageMarker(content: string): boolean {
-  return ALL_IMAGE_MARKERS.some(m => content.includes(m))
-}
-
-function findImageMarker(content: string): { marker: string; pos: number; prefixLen: number } | null {
-  for (const m of ALL_IMAGE_MARKERS) {
-    const idx = content.indexOf(m)
-    if (idx !== -1) return { marker: m, pos: idx, prefixLen: m.length }
-  }
-  return null
-}
-
-export function extractImageUrl(content: string): string | null {
-  let idx = content.indexOf(IMAGE_PREFIX)
-  let prefixLen = IMAGE_PREFIX.length
-  if (idx === -1) {
-    idx = content.indexOf(IMAGE_PREFIX_FALLBACK)
-    if (idx === -1) return null
-    prefixLen = IMAGE_PREFIX_FALLBACK.length
-  }
-  return content.slice(idx + prefixLen)
-}
-
-export function extractImageCaption(content: string): string | null {
-  let idx = content.indexOf(IMAGE_PREFIX)
-  if (idx === -1) {
-    idx = content.indexOf(IMAGE_PREFIX_FALLBACK)
-    if (idx === -1) idx = findImagesPrefixPos(content)
-  }
-  if (idx === -1) return null
-  if (idx <= 0) return null
-  return content.slice(0, idx).replace(/\n+$/, '')
-}
-
-function findImagesPrefixPos(content: string): number {
-  const i1 = content.indexOf(IMAGES_PREFIX)
-  if (i1 !== -1) return i1
-  return content.indexOf(IMAGES_PREFIX_FALLBACK)
-}
-
-export function extractImageUrls(content: string): string[] {
-  const found = findImageMarker(content)
-  if (!found) return []
-  const rest = content.slice(found.pos + found.prefixLen)
-  try {
-    const parsed = JSON.parse(rest)
-    if (Array.isArray(parsed)) return parsed.filter((u): u is string => typeof u === 'string')
-    return []
-  } catch {
-    return []
-  }
-}
-
-export function extractImagesCaption(content: string): string | null {
-  const idx = findImagesPrefixPos(content)
-  if (idx === -1) return extractImageCaption(content)
-  if (idx <= 0) return null
-  return content.slice(0, idx).replace(/\n+$/, '')
 }
 
 interface ImageGalleryProps {
@@ -191,40 +106,22 @@ interface ImageGalleryProps {
 }
 
 export function ImageGallery({ images, onOpen }: ImageGalleryProps) {
-  const [ctxMenu, setCtxMenu] = useState<{ url: string; x: number; y: number } | null>(null)
-
   if (images.length === 0) return null
   if (images.length === 1) {
     return (
-      <>
-        <button
-          onClick={() => onOpen(0)}
-          onContextMenu={(e) => {
-            e.preventDefault()
-            e.stopPropagation()
-            setCtxMenu({ url: images[0], x: e.clientX, y: e.clientY })
-          }}
-          onTouchStart={(e) => e.stopPropagation()}
-          className="block rounded-lg overflow-hidden border border-slate-700/60 hover:border-indigo-500 transition-colors"
-          aria-label="Abrir galería"
-        >
-          <img
-            src={images[0]}
-            alt=""
-            className="block max-w-full max-h-72 object-contain bg-slate-950"
-            loading="lazy"
-            draggable={false}
-          />
-        </button>
-        {ctxMenu && (
-          <ImageContextMenuPortal
-            url={ctxMenu.url}
-            x={ctxMenu.x}
-            y={ctxMenu.y}
-            onClose={() => setCtxMenu(null)}
-          />
-        )}
-      </>
+      <button
+        onClick={() => onOpen(0)}
+        className="block rounded-lg overflow-hidden border border-slate-700/60 hover:border-indigo-500 transition-colors"
+        aria-label="Abrir galería"
+      >
+        <img
+          src={images[0]}
+          alt=""
+          className="block max-w-full max-h-72 object-contain bg-slate-950"
+          loading="lazy"
+          draggable={false}
+        />
+      </button>
     )
   }
 
@@ -240,12 +137,6 @@ export function ImageGallery({ images, onOpen }: ImageGalleryProps) {
             <button
               key={i}
               onClick={() => onOpen(i)}
-              onContextMenu={(e) => {
-                e.preventDefault()
-                e.stopPropagation()
-                setCtxMenu({ url, x: e.clientX, y: e.clientY })
-              }}
-              onTouchStart={(e) => e.stopPropagation()}
               className="flex-shrink-0 rounded-md overflow-hidden border border-slate-700/60 hover:border-indigo-500 transition-colors relative"
               aria-label={`Ir a imagen ${i + 1}`}
             >
@@ -266,14 +157,6 @@ export function ImageGallery({ images, onOpen }: ImageGalleryProps) {
         </div>
         <div className="pointer-events-none absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-slate-950 to-transparent" />
       </div>
-      {ctxMenu && (
-        <ImageContextMenuPortal
-          url={ctxMenu.url}
-          x={ctxMenu.x}
-          y={ctxMenu.y}
-          onClose={() => setCtxMenu(null)}
-        />
-      )}
     </div>
   )
 }

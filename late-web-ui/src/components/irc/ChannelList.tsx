@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react'
-import type { ChannelState, ChannelCategory } from '../../lib/irc/types'
+import type { ChannelState, ChannelCategory } from '../../lib/chat/domain/types'
 import ChannelContextMenu, { useChannelContextMenuState } from './ChannelContextMenu'
 import { Hash, ChevronDown, ChevronRight, Plus } from 'lucide-react'
 

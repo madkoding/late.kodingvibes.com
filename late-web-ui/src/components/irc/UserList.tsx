@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react'
-import type { ChannelMember } from '../../lib/irc/types'
+import type { ChannelMember } from '../../lib/chat/domain/types'
 import { getNickColor } from '../../lib/irc/colors'
 import Avatar from './Avatar'
 import UserContextMenu, { useUserContextMenuState } from './UserContextMenu'

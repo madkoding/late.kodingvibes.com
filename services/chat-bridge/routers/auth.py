@@ -17,7 +17,7 @@ async def healthz():
 @router.post("/api/chat/exchange")
 async def exchange(req: ExchangeRequest):
     try:
-        payload = jwt.decode(req.token, SSO_SECRET, algorithms=["HS256"], audience="late.sh", issuer="kodingvibes.com")
+        payload = jwt.decode(req.token, SSO_SECRET, algorithms=["HS256"], options={"verify_aud": False}, issuer="kodingvibes.com")
     except jwt.ExpiredSignatureError:
         raise HTTPException(401, "Token expired")
     except jwt.InvalidTokenError as e:

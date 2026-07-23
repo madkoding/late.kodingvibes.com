@@ -84,4 +84,57 @@ export class VoicePeer {
   close() {
     this.pc.close()
   }
+
+  /** Add the given stream's tracks to the connection and re-negotiate.
+   *  Used when the local mic resolves AFTER the initial offer was sent
+   *  (without an audio track). Returns the new offer SDP if we are the
+   *  initiator, else the answer SDP. Returns null if neither side
+   *  needs a re-negotiation. */
+  async addLocalStream(stream: MediaStream): Promise<{ kind: 'offer' | 'answer'; sdp: string } | null> {
+    const senders = this.pc.getSenders()
+    for (const track of stream.getTracks()) {
+      const hasSender = senders.some(s => s.track && s.track.kind === track.kind)
+      if (!hasSender) {
+        this.pc.addTrack(track, stream)
+      }
+    }
+    // If we already have a remote description, re-negotiate.
+    if (this.pc.remoteDescription) {
+      const answer = await this.pc.createAnswer()
+      await this.pc.setLocalDescription(answer)
+      return { kind: 'answer', sdp: JSON.stringify(answer) }
+    }
+    if (this.pc.localDescription) {
+      // We're the initiator, already sent an offer without audio.
+      // Re-offer with audio now.
+      const offer = await this.pc.createOffer({ iceRestart: false })
+      await this.pc.setLocalDescription(offer)
+      return { kind: 'offer', sdp: JSON.stringify(offer) }
+    }
+    return null
+  }
+
+  /** Restart ICE — useful when the connection has failed or
+   *  disconnected and we want to try a fresh candidate gathering
+   *  round. Returns the new offer SDP (we must be the initiator, or
+   *  have an active remote description). */
+  async restartIce(): Promise<string | null> {
+    if (!this.pc.remoteDescription && !this.pc.localDescription) {
+      // No negotiation yet — just create a fresh offer.
+      const offer = await this.pc.createOffer({ iceRestart: true })
+      await this.pc.setLocalDescription(offer)
+      return JSON.stringify(offer)
+    }
+    if (this.pc.remoteDescription) {
+      // We're the answerer. To restart ICE we need to ask the offerer
+      // to re-offer. For now return null — the caller's UI will
+      // surface a reconnect prompt. (We rarely hit this path because
+      // the offerer drives the flow.)
+      return null
+    }
+    // We're the offerer — re-offer with ICE restart.
+    const offer = await this.pc.createOffer({ iceRestart: true })
+    await this.pc.setLocalDescription(offer)
+    return JSON.stringify(offer)
+  }
 }

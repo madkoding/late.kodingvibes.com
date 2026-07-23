@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import type { ChatMessage } from './irc/types'
+import type { ChatMessage } from './chat/domain/types'
 
 export function formatToast(
   msg: ChatMessage,

@@ -8,6 +8,7 @@ export interface VoiceSignaling {
   sendIce: (to: number, candidate: string) => void
   sendHangup: () => void
   on: (type: string, handler: VoiceMessageHandler) => () => void
+  emit: (type: string, data: any) => void
   destroy: () => void
 }
 
@@ -18,6 +19,10 @@ export function createVoiceSignaling(sendViaWs: (msg: object) => void): VoiceSig
     if (!handlers.has(type)) handlers.set(type, new Set())
     handlers.get(type)!.add(handler)
     return () => handlers.get(type)?.delete(handler)
+  }
+
+  const emit = (type: string, data: any) => {
+    handlers.get(type)?.forEach(h => h(data))
   }
 
   return {
@@ -40,6 +45,7 @@ export function createVoiceSignaling(sendViaWs: (msg: object) => void): VoiceSig
       sendViaWs({ type: 'voice.hangup' })
     },
     on,
+    emit,
     destroy() {
       handlers.clear()
     },

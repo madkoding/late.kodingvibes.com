@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import type { ChatMessage } from '../../lib/irc/types'
+import type { ChatMessage } from '../../lib/chat/domain/types'
 import { getEmoji } from '../../lib/emoji'
-import { SmilePlus, Bell, Copy, MessageSquareReply, CornerUpRight, EyeOff, Trash2, Hash } from 'lucide-react'
+import { hasImageMarker, getAttachmentMarker } from '../../lib/chat/domain/parsers'
+import { SmilePlus, Bell, Copy, MessageSquareReply, CornerUpRight, EyeOff, Trash2, Hash, Download, ImageDown, FileDown, Link as LinkIcon } from 'lucide-react'
 
 function EmojiIcon({ name, size = 20 }: { name: string; size?: number }) {
   const def = getEmoji(name)
@@ -20,6 +21,7 @@ export interface ContextMenuState {
   y: number
   message: ChatMessage | null
   isOwn: boolean
+  isTargetOnline: boolean
 }
 
 interface MessageContextMenuProps {
@@ -33,12 +35,16 @@ interface MessageContextMenuProps {
   myRole?: string | null
   onHide?: (messageId: number) => void
   onDelete?: (messageId: number) => void
+  onCopyImage?: (message: ChatMessage) => void
+  onDownloadImage?: (message: ChatMessage) => void
+  onDownloadAttachment?: (message: ChatMessage) => void
+  onCopyLink?: (message: ChatMessage) => void
 }
 
 const quickEmojis = ['heart', 'thumbsup', 'thumbsdown', 'laugh', 'smile', 'point', 'cry', 'serious', 'angry', 'fire', 'star', 'sparkles', 'rocket', 'check']
 
 export default function MessageContextMenu({
-  state, onClose, onReact, onReply, onBuzz, onCopyText, onForward, myRole, onHide, onDelete,
+  state, onClose, onReact, onReply, onBuzz, onCopyText, onForward, myRole, onHide, onDelete, onCopyImage, onDownloadImage, onDownloadAttachment, onCopyLink,
 }: MessageContextMenuProps) {
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
   const isAdmin = myRole === 'admin' || myRole === 'mod'
@@ -48,25 +54,30 @@ export default function MessageContextMenu({
   useEffect(() => {
     if (!state.show) return
     setShowEmojiPicker(false)
-    const onDown = (e: MouseEvent | TouchEvent) => {
+    // Use 'click' (not 'mousedown') so button onClick handlers
+    // inside the menu fire BEFORE the outside-click check runs.
+    // With 'mousedown' the document listener could close the menu
+    // before the button's click handler executes, making
+    // Responder/Reenviar/Copiar appear to do nothing.
+    const onClickOutside = (e: MouseEvent | TouchEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) onClose()
     }
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
     }
-    document.addEventListener('mousedown', onDown)
-    document.addEventListener('touchstart', onDown)
+    document.addEventListener('mousedown', onClickOutside)
+    document.addEventListener('touchstart', onClickOutside)
     document.addEventListener('keydown', onKey)
     return () => {
-      document.removeEventListener('mousedown', onDown)
-      document.removeEventListener('touchstart', onDown)
+      document.removeEventListener('mousedown', onClickOutside)
+      document.removeEventListener('touchstart', onClickOutside)
       document.removeEventListener('keydown', onKey)
     }
   }, [state.show, onClose])
 
   if (!state.show || !state.message) return null
 
-  const { message, isOwn, x, y } = state
+  const { message, isOwn, isTargetOnline, x, y } = state
   const menuW = 200
   const menuH = isOwn ? 160 : 210
   const vpW = window.innerWidth
@@ -83,6 +94,7 @@ export default function MessageContextMenu({
     >
       <button
         type="button"
+        onMouseDown={(e) => e.stopPropagation()}
         onClick={() => {
           setShowEmojiPicker(v => !v)
         }}
@@ -98,6 +110,7 @@ export default function MessageContextMenu({
             <button
               key={name}
               type="button"
+              onMouseDown={(e) => e.stopPropagation()}
               onClick={() => {
                 onReact(message.id, name)
                 onClose()
@@ -112,6 +125,7 @@ export default function MessageContextMenu({
       )}
       <button
         type="button"
+        onMouseDown={(e) => e.stopPropagation()}
         onClick={() => {
           onReply(message)
           onClose()
@@ -123,6 +137,7 @@ export default function MessageContextMenu({
       </button>
       <button
         type="button"
+        onMouseDown={(e) => e.stopPropagation()}
         onClick={() => {
           onForward(message)
           onClose()
@@ -132,9 +147,10 @@ export default function MessageContextMenu({
         <CornerUpRight className="w-4 h-4 text-cyan-400" />
         Reenviar
       </button>
-      {!isOwn && (
+      {!isOwn && isTargetOnline && (
         <button
           type="button"
+          onMouseDown={(e) => e.stopPropagation()}
           onClick={() => {
             onBuzz(message.user_id)
             onClose()
@@ -150,6 +166,7 @@ export default function MessageContextMenu({
           <div className="h-px bg-slate-800 my-1" />
           <button
             type="button"
+            onMouseDown={(e) => e.stopPropagation()}
             onClick={() => {
               navigator.clipboard.writeText(String(message.id)).catch(() => {})
               onClose()
@@ -161,6 +178,7 @@ export default function MessageContextMenu({
           </button>
           <button
             type="button"
+            onMouseDown={(e) => e.stopPropagation()}
             onClick={() => {
               onHide?.(message.id)
               onClose()
@@ -172,6 +190,7 @@ export default function MessageContextMenu({
           </button>
           <button
             type="button"
+            onMouseDown={(e) => e.stopPropagation()}
             onClick={() => {
               onDelete?.(message.id)
               onClose()
@@ -185,6 +204,7 @@ export default function MessageContextMenu({
       )}
       <button
         type="button"
+        onMouseDown={(e) => e.stopPropagation()}
         onClick={() => {
           onCopyText(message.content)
           onClose()
@@ -194,13 +214,69 @@ export default function MessageContextMenu({
         <Copy className="w-4 h-4 text-slate-400" />
         Copiar texto
       </button>
+      {hasImageMarker(message.content) && onCopyImage && (
+        <button
+          type="button"
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={() => {
+            onCopyImage(message)
+            onClose()
+          }}
+          className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-slate-200 hover:bg-slate-800 transition-colors"
+        >
+          <ImageDown className="w-4 h-4 text-slate-400" />
+          Copiar imagen
+        </button>
+      )}
+      {hasImageMarker(message.content) && onDownloadImage && (
+        <button
+          type="button"
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={() => {
+            onDownloadImage(message)
+            onClose()
+          }}
+          className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-slate-200 hover:bg-slate-800 transition-colors"
+        >
+          <Download className="w-4 h-4 text-slate-400" />
+          Descargar imagen
+        </button>
+      )}
+      {getAttachmentMarker(message.content) && onDownloadAttachment && (
+        <button
+          type="button"
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={() => {
+            onDownloadAttachment(message)
+            onClose()
+          }}
+          className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-slate-200 hover:bg-slate-800 transition-colors"
+        >
+          <FileDown className="w-4 h-4 text-slate-400" />
+          Descargar archivo
+        </button>
+      )}
+      {getAttachmentMarker(message.content) && onCopyLink && (
+        <button
+          type="button"
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={() => {
+            onCopyLink(message)
+            onClose()
+          }}
+          className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-slate-200 hover:bg-slate-800 transition-colors"
+        >
+          <LinkIcon className="w-4 h-4 text-slate-400" />
+          Copiar enlace
+        </button>
+      )}
     </div>
   )
 }
 
 export function useContextMenuState() {
   const [menu, setMenu] = useState<ContextMenuState>({
-    show: false, x: 0, y: 0, message: null, isOwn: false,
+    show: false, x: 0, y: 0, message: null, isOwn: false, isTargetOnline: false,
   })
 
   const close = useCallback(() => {

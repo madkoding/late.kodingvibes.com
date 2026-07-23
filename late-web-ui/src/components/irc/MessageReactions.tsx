@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { createPortal } from 'react-dom'
-import type { Reaction } from '../../lib/irc/types'
+import type { Reaction } from '../../lib/chat/domain/types'
 import { getEmoji } from '../../lib/emoji'
 
 function EmojiIcon({ name, size = 16 }: { name: string; size?: number }) {

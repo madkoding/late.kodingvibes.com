@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import type { ChannelMember } from '../../lib/irc/types'
+import type { ChannelMember } from '../../lib/chat/domain/types'
 import { Bell, Copy } from 'lucide-react'
 
 export interface UserContextMenuState {

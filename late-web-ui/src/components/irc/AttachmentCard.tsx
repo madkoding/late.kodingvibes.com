@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
 import { FileText, Music, Download, Clock, Maximize2 } from 'lucide-react'
-import { ImageContextMenuPortal } from './ImagePreview'
 import AudioWaveform from './AudioWaveform'
 
 interface AttachmentMeta {
@@ -82,6 +81,14 @@ export default function AttachmentCard({
     return () => clearInterval(id)
   }, [meta])
 
+  // Suppress the browser's native context menu on embedded
+  // media so the parent's MessageContextMenu (with reactions,
+  // reply, forward, moderation, etc.) shows up instead.
+  const swallowContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+  }
+
   if (error) {
     return (
       <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-rose-900/20 border border-rose-800/40 text-xs text-rose-300">
@@ -103,36 +110,21 @@ export default function AttachmentCard({
   const ext = meta.filename.split('.').pop()?.toUpperCase() || ''
 
   if (meta.kind === 'image') {
-    const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null)
     const imgUrl = `/api/chat/attachments/${attachmentId}`
     return (
-      <>
-        <div className="relative group">
-          <img
-            src={imgUrl}
-            alt={meta.filename}
-            className="block max-w-full max-h-72 object-contain rounded-lg border border-slate-700/60 bg-slate-950"
-            loading="lazy"
-            onContextMenu={(e) => {
-              e.preventDefault()
-              e.stopPropagation()
-              setCtxMenu({ x: e.clientX, y: e.clientY })
-            }}
-          />
-          <div className="absolute bottom-1 right-1 flex items-center gap-1.5 px-2 py-1 rounded-md bg-black/70 text-[10px] text-slate-300 opacity-0 group-hover:opacity-100 transition-opacity">
-            <Clock className="w-3 h-3" />
-            {expiresLabel}
-          </div>
+      <div className="relative group">
+        <img
+          src={imgUrl}
+          alt={meta.filename}
+          className="block max-w-full max-h-72 object-contain rounded-lg border border-slate-700/60 bg-slate-950"
+          loading="lazy"
+          onContextMenu={swallowContextMenu}
+        />
+        <div className="absolute bottom-1 right-1 flex items-center gap-1.5 px-2 py-1 rounded-md bg-black/70 text-[10px] text-slate-300 opacity-0 group-hover:opacity-100 transition-opacity">
+          <Clock className="w-3 h-3" />
+          {expiresLabel}
         </div>
-        {ctxMenu && (
-          <ImageContextMenuPortal
-            url={imgUrl}
-            x={ctxMenu.x}
-            y={ctxMenu.y}
-            onClose={() => setCtxMenu(null)}
-          />
-        )}
-      </>
+      </div>
     )
   }
 
@@ -167,6 +159,7 @@ export default function AttachmentCard({
             className="max-w-full max-h-72 rounded-lg border border-slate-700/60 bg-slate-950"
             preload="metadata"
             onPlay={() => onVideoPlay?.(attachmentId)}
+            onContextMenu={swallowContextMenu}
           >
             Tu navegador no soporta video.
           </video>
@@ -194,6 +187,7 @@ export default function AttachmentCard({
       href={`/api/chat/attachments/${attachmentId}`}
       target="_blank"
       rel="noopener noreferrer"
+      onContextMenu={swallowContextMenu}
       className="flex items-center gap-3 p-3 rounded-lg bg-slate-800/50 border border-slate-700/50 hover:bg-slate-700/50 transition-colors group min-w-[220px]"
     >
       <div className="w-10 h-10 rounded-lg bg-slate-700 flex items-center justify-center text-[10px] font-bold text-slate-300 flex-shrink-0">

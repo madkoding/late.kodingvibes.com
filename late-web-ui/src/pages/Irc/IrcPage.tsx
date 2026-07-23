@@ -1,7 +1,8 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import VoiceRoomView from "@/components/irc/VoiceRoomView";
 import { ChatClient } from "@/lib/irc/chat-client";
-import type { SSOSession, ChannelState, ChatMessage, ChannelCategory } from "@/lib/irc/types";
+import type { SSOSession, ChannelState, ChatMessage, ChannelCategory } from "@/lib/chat/domain/types";
+import { extractImageUrl, extractImageUrls, getAttachmentMarker } from "@/lib/chat/domain/parsers";
 import ChannelList from "@/components/irc/ChannelList";
 import UserList from "@/components/irc/UserList";
 import MessageList from "@/components/irc/MessageList";
@@ -20,35 +21,27 @@ import useDocumentTitle from "@/lib/use-document-title";
 import { ensureNotificationAudio, playMentionBeep, playBuzz, setVolume } from "@/lib/notification-sound";
 import { formatToast, showSystemNotification, useRequestNotificationPermission } from "@/lib/chat-notifs";
 import { useHeaderOffset } from "@/lib/use-header-offset";
+import { redirectToSso, ssoBudgetExhausted, clearSsoBudget, getSavedSession, saveSession, clearSession, fullSignOut } from "@/lib/chat/services/auth-service";
+import { debugLog, debugError, installDebugHandle, takeSnapshot } from "@/lib/session-debug";
+import { APP_VERSION } from "@/lib/version";
+import { getOrCreateAudioContext, resumeAudioContext } from "@/voice/audioContext";
 import { Topbar } from "./Topbar";
 
-const SESSION_KEY = "chat.session";
 const CHANNEL_KEY = "chat.channel";
-const SSO_URL = "https://www.kodingvibes.com/api/sso/irc-token";
-const SSO_REDIRECT_COUNT_KEY = "chat.sso_redirects";
-const MAX_SSO_REDIRECTS = 2;
-
-function redirectToSso() {
-  const next = Number(sessionStorage.getItem(SSO_REDIRECT_COUNT_KEY) || "0") + 1;
-  sessionStorage.setItem(SSO_REDIRECT_COUNT_KEY, String(next));
-  localStorage.removeItem(SESSION_KEY);
-  localStorage.removeItem(CHANNEL_KEY);
-  localStorage.removeItem("late_redirect");
-  window.location.href = SSO_URL;
-}
-
-function ssoBudgetExhausted() {
-  return Number(sessionStorage.getItem(SSO_REDIRECT_COUNT_KEY) || "0") >= MAX_SSO_REDIRECTS;
-}
-
-function clearSsoBudget() {
-  sessionStorage.removeItem(SSO_REDIRECT_COUNT_KEY);
-}
 
 export function Irc() {
   useDocumentTitle();
   useRequestNotificationPermission();
   const audio = useAudio();
+
+  // Install a copyable debug handle on first render so users
+  // who hit a login error can grab a snapshot from the
+  // DevTools console (window.__lateDebug.snapshot()).
+  useEffect(() => {
+    ;(window as any).__APP_VERSION__ = APP_VERSION
+    installDebugHandle()
+    debugLog('boot', 'IrcPage mounted', { version: APP_VERSION, href: window.location.href })
+  }, [])
   const { headerHeight, vh } = useHeaderOffset();
   const [loading, setLoading] = useState(true);
   const [chatError, setChatError] = useState<string | null>(null);
@@ -86,6 +79,9 @@ export function Irc() {
   const videoElementsRef = useRef<Map<string, HTMLVideoElement>>(new Map());
   const floatingContainerRef = useRef<HTMLDivElement>(null);
   const restoreTimeRef = useRef<{ attachmentId: string; time: number } | null>(null);
+  // Debounce online-count refreshes so a burst of messages in
+  // a busy channel doesn't fire N REST calls.
+  const onlineRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const closeFloatingVideo = useCallback(() => {
     const container = floatingContainerRef.current
@@ -123,6 +119,7 @@ export function Irc() {
     const v = localStorage.getItem(CHANNEL_KEY);
     return v ? Number(v) : null;
   });
+  const currentChan = currentChannel !== null ? channels.get(currentChannel) : null;
   const [toasts, setToasts] = useState<{ id: string; text: string; type: string }[]>([]);
   const toastTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const clientRef = useRef<ChatClient | null>(null);
@@ -176,10 +173,6 @@ export function Irc() {
       const c = clientRef.current
       if (!c) return
       c.refreshChannels().catch(() => {})
-      const id = c.getCurrentChannel()
-      if (id !== null) {
-        c.reloadCurrentChannelHistory().catch(() => {})
-      }
     }
     document.addEventListener('visibilitychange', onVisible)
     window.addEventListener('focus', onVisible)
@@ -191,18 +184,45 @@ export function Irc() {
     }
   }, [])
 
+  // Sync online count from the socket — every new message
+  // bumps last_seen on the server, so re-fetching the channel
+  // list + members after each event keeps the Topbar badge and
+  // the UserList in sync without polling.
+  const refreshOnline = useRef(() => {
+    const c = clientRef.current
+    if (!c) return
+    c.refreshChannels().catch(() => {})
+    const id = c.getCurrentChannel()
+    if (id !== null) c.loadMembers(id).catch(() => {})
+  })
+  const scheduleOnlineRefresh = useRef(() => {
+    if (onlineRefreshTimerRef.current) return
+    onlineRefreshTimerRef.current = setTimeout(() => {
+      onlineRefreshTimerRef.current = null
+      refreshOnline.current()
+    }, 5000)
+  })
+
   useEffect(() => {
     let cancelled = false;
     const params = new URLSearchParams(window.location.search);
     const token = params.get("token");
     const logout = params.get("logout") === "1";
 
+    debugLog('boot', 'IrcPage effect start', {
+      hasUrlToken: !!token,
+      urlTokenLen: token ? token.length : 0,
+      logoutFlag: logout,
+      budgetExhausted: ssoBudgetExhausted(),
+    })
+
     if (token) {
       window.history.replaceState({}, "", "/irc");
     }
 
     if (logout) {
-      localStorage.removeItem(SESSION_KEY);
+      debugLog('boot', 'logout=1 in URL, clearing session and reloading')
+      clearSession();
       localStorage.removeItem(CHANNEL_KEY);
       localStorage.removeItem("late_redirect");
       window.history.replaceState({}, "", "/irc");
@@ -210,15 +230,7 @@ export function Irc() {
       return;
     }
 
-    const saved = localStorage.getItem(SESSION_KEY);
-    let parsed: SSOSession | null = null;
-    if (saved) {
-      try {
-        parsed = JSON.parse(saved) as SSOSession;
-      } catch {
-        localStorage.removeItem(SESSION_KEY);
-      }
-    }
+    const parsed = getSavedSession<SSOSession>();
 
     const startChat = async (s: SSOSession) => {
       if (cancelled) return
@@ -253,6 +265,7 @@ export function Irc() {
       client.onMessage((msg: ChatMessage) => {
         if (clientRef.current !== client) return
         if (msg.user_id === myUserIdRef.current) return
+        scheduleOnlineRefresh.current()
         setTyping(prev => {
           if (!prev.has(msg.user_id)) return prev
           const next = new Map(prev)
@@ -292,13 +305,17 @@ export function Irc() {
       })
       client.onBuzz((data) => {
         if (clientRef.current !== client) return
+        debugLog('buzz', 'onBuzz received', { from: data.from_user_id, myUserId: myUserIdRef.current, isMine: data.from_user_id === myUserIdRef.current })
+        const isMine = data.from_user_id === myUserIdRef.current
         playBuzz(notifPrefsRef.current.volume)
         setBuzzShake(true)
         setTimeout(() => setBuzzShake(false), 600)
         if (notifPrefsRef.current.vibration && navigator.vibrate) {
           navigator.vibrate([200, 100, 200, 100, 200])
         }
-        pushToast(`🔔 ${data.from_display_name} te está zumbando`, 'mention')
+        if (!isMine) {
+          pushToast(`🔔 ${data.from_display_name} te está zumbando`, 'mention')
+        }
       })
       client.onMemberMuted((data) => {
         if (clientRef.current !== client) return
@@ -310,11 +327,22 @@ export function Irc() {
       })
       client.onAuthFatal(() => {
         if (cancelled) return
+        debugError('auth', 'onAuthFatal fired by client', {
+          connected: client.isConnected(),
+          currentChannel: client.getCurrentChannel(),
+          user: client.getUser(),
+        })
+        // If the SSO redirect budget is exhausted, fall through
+        // to the full-sign-out error so the user can manually
+        // retry. Otherwise just clear the session and redirect.
         if (ssoBudgetExhausted()) {
-          setChatError("No se pudo conectar al chat. Reintentá en unos minutos.")
+          debugError('auth', 'SSO budget exhausted, fullSignOut() + show error screen')
+          fullSignOut()
+          setChatError("Tu sesión expiró. Hacé clic en Reintentar para volver a iniciar sesión.")
           setLoading(false)
           return
         }
+        debugLog('auth', 'SSO budget not exhausted, redirectToSso()')
         redirectToSso()
       })
       try {
@@ -335,10 +363,13 @@ export function Irc() {
         }
       } catch (err: any) {
         if (cancelled) return
+        debugError('start', 'ChatClient.start() threw', { message: err?.message, tokenInvalid: tokenInvalidRef.current })
         setLoading(false)
         if (tokenInvalidRef.current) return
         if (ssoBudgetExhausted()) {
-          setChatError("No se pudo conectar al chat. Reintentá en unos minutos.")
+          debugError('start', 'SSO budget exhausted after start() failure, fullSignOut()')
+          fullSignOut()
+          setChatError("Tu sesión expiró. Hacé clic en Reintentar para volver a iniciar sesión.")
           return
         }
         redirectToSso()
@@ -346,45 +377,63 @@ export function Irc() {
     }
 
     if (!token && parsed) {
+      debugLog('boot', 'have saved session, calling startChat(parsed)')
       startChat(parsed).catch(() => {})
       return
     }
 
     if (!token) {
+      debugLog('boot', 'no token and no saved session')
       setLoading(false)
       if (ssoBudgetExhausted()) {
-        setChatError("No se pudo conectar al chat. Reintentá en unos minutos.")
+        debugError('boot', 'SSO budget exhausted at first load, fullSignOut()')
+        fullSignOut()
+        setChatError("Tu sesión expiró. Hacé clic en Reintentar para volver a iniciar sesión.")
         return
       }
+      debugLog('boot', 'redirectToSso() from first load')
       redirectToSso()
       return
     }
 
+    debugLog('exchange', 'POST /api/chat/exchange start', { tokenLen: token.length })
     fetch("/api/chat/exchange", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ token }),
     })
       .then(async (res) => {
+        debugLog('exchange', '/api/chat/exchange response', { status: res.status, ok: res.ok })
         if (!res.ok) {
           const body = await res.json().catch(() => ({}))
+          debugError('exchange', '/api/chat/exchange not-ok', { status: res.status, detail: body?.detail })
           throw new Error(body.detail || "Error al conectar con el servidor")
         }
         return res.json() as Promise<SSOSession>
       })
       .then((s) => {
         if (cancelled) return
-        localStorage.setItem(SESSION_KEY, JSON.stringify(s))
+        debugLog('exchange', '/api/chat/exchange success, saveSession + startChat', {
+          session_id_len: s?.session_id ? String(s.session_id).length : 0,
+          expires_at: (s as any)?.expires_at ?? null,
+          user_id: s?.user?.id ?? null,
+          email: s?.user?.email ?? null,
+        })
+        saveSession(s)
         startChat(s).catch(() => {})
       })
-      .catch(() => {
+      .catch((err) => {
         if (cancelled) return
+        debugError('exchange', '/api/chat/exchange fetch failed', { message: err?.message })
         if (parsed) {
+          debugLog('exchange', 'fallback: try startChat with previously-saved session')
           startChat(parsed).catch(() => {})
         } else {
           setLoading(false)
           if (ssoBudgetExhausted()) {
-            setChatError("No se pudo conectar al chat. Reintentá en unos minutos.")
+            debugError('exchange', 'SSO budget exhausted, no saved session, fullSignOut()')
+            fullSignOut()
+            setChatError("Tu sesión expiró. Hacé clic en Reintentar para volver a iniciar sesión.")
             return
           }
           redirectToSso()
@@ -408,6 +457,10 @@ export function Irc() {
         clearTimeout(timer)
       }
       toastTimers.current.clear()
+      if (onlineRefreshTimerRef.current) {
+        clearTimeout(onlineRefreshTimerRef.current)
+        onlineRefreshTimerRef.current = null
+      }
       if (clientRef.current) {
         clientRef.current.disconnect()
         clientRef.current = null
@@ -523,24 +576,82 @@ export function Irc() {
 
   const handleBuzz = useCallback(async (targetUserId: number) => {
     if (currentChannel === null) return
+    debugLog('buzz', 'handleBuzz called', { currentChannel, targetUserId, hasClient: !!clientRef.current })
     try {
       await clientRef.current?.buzz(currentChannel, targetUserId)
+      debugLog('buzz', 'buzz POST resolved', { targetUserId })
       const targetName = channelsRef.current.get(currentChannel)?.members?.find(m => m.id === targetUserId)?.display_name ?? 'usuario'
-      playBuzz(notifPrefsRef.current.volume)
-      setBuzzShake(true)
-      setTimeout(() => setBuzzShake(false), 600)
-      if (notifPrefsRef.current.vibration && navigator.vibrate) {
-        navigator.vibrate([200, 100, 200, 100, 200])
-      }
       pushToast(`🔔 Zumbaste a ${targetName}`, 'mention')
     } catch (err) {
-      pushToast(`Error: ${(err as Error).message}`, 'error')
+      debugError('buzz', 'buzz POST failed', { message: (err as Error).message })
+      const msg = (err as Error).message
+      if (msg.includes('not online') || msg.includes('404')) {
+        pushToast('Ese usuario no está en línea', 'error')
+      } else {
+        pushToast(`Error: ${msg}`, 'error')
+      }
     }
   }, [currentChannel, pushToast])
 
   const handleCopyText = useCallback((text: string) => {
     navigator.clipboard.writeText(text).catch(() => {})
   }, [])
+
+  const handleCopyImage = useCallback(async (msg: ChatMessage) => {
+    const urls = extractImageUrls(msg.content)
+    const first = urls.length > 0 ? urls[0] : extractImageUrl(msg.content)
+    if (!first) return
+    const src = first.startsWith('data:') ? first : `/api/chat/attachments/${first}`
+    try {
+      const res = await fetch(src)
+      const blob = await res.blob()
+      // Clipboard API requires PNG or similar; for other types
+      // we fall back to downloading.
+      if (blob.type === 'image/png' || blob.type === 'image/jpeg') {
+        await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })])
+        pushToast('Imagen copiada al portapapeles', 'join')
+      } else {
+        const a = document.createElement('a')
+        a.href = src
+        a.download = first
+        a.click()
+        pushToast('Formato no compatible, descargando', 'join')
+      }
+    } catch {
+      pushToast('No se pudo copiar la imagen', 'error')
+    }
+  }, [pushToast])
+
+  const handleDownloadImage = useCallback((msg: ChatMessage) => {
+    const urls = extractImageUrls(msg.content)
+    const first = urls.length > 0 ? urls[0] : extractImageUrl(msg.content)
+    if (!first) return
+    const src = first.startsWith('data:') ? first : `/api/chat/attachments/${first}`
+    const a = document.createElement('a')
+    a.href = src
+    a.download = first
+    a.click()
+  }, [])
+
+  const handleDownloadAttachment = useCallback((msg: ChatMessage) => {
+    const att = getAttachmentMarker(msg.content)
+    if (!att) return
+    const src = `/api/chat/attachments/${att.id}`
+    const a = document.createElement('a')
+    a.href = src
+    a.download = att.id
+    a.click()
+  }, [])
+
+  const handleCopyLink = useCallback((msg: ChatMessage) => {
+    const att = getAttachmentMarker(msg.content)
+    if (!att) return
+    const url = `${window.location.origin}/api/chat/attachments/${att.id}`
+    navigator.clipboard.writeText(url).then(
+      () => pushToast('Enlace copiado', 'join'),
+      () => pushToast('No se pudo copiar el enlace', 'error')
+    )
+  }, [pushToast])
 
   const handleSaveNotifPrefs = useCallback((prefs: any) => {
     setNotifPrefs(prefs)
@@ -581,8 +692,25 @@ export function Irc() {
   }, [])
 
   const handleVoiceJoin = useCallback((channelId: number) => {
+    // ponytail: create + resume the AudioContext INSIDE the click
+    // handler. iOS Safari requires this for the autoplay policy; doing
+    // it later (in VoiceRoomView's useEffect) puts the call outside
+    // the user-gesture stack and the context stays suspended forever,
+    // which makes MediaStreamAudioDestinationNode emit silent tracks.
+    try {
+      getOrCreateAudioContext()
+      resumeAudioContext().catch(() => {})
+    } catch { /* unsupported, getUserMedia will fail next */ }
     setActiveVoiceChannelId(channelId)
-  }, [])
+    // ponytail: load the text-chat history for this voice channel.
+    // The /channels list call returns metadata only, never per-channel
+    // messages, so without this the chat panel renders empty even if
+    // the server has messages from a previous session.
+    const ch = channels.get(channelId)
+    if (ch && ch.messages.length === 0) {
+      clientRef.current?.loadHistory(channelId).catch(() => {})
+    }
+  }, [channels])
 
   const handleVoiceLeave = useCallback((_channelId: number) => {
     setActiveVoiceChannelId(null)
@@ -592,8 +720,7 @@ export function Irc() {
     try {
       await clientRef.current?.api('POST', `/api/chat/channels/${channelId}/leave`)
       pushToast('Saliste del canal', 'join')
-      const ch = channels.get(channelId)
-      if (ch && ch.name === currentChan?.name) {
+      if (channelId === currentChannel) {
         const first = Array.from(channels.values()).find(c => c.joined && c.id !== channelId)
         if (first) {
           const prev = channels.get(channelId)
@@ -623,8 +750,6 @@ export function Irc() {
     setShowJoinModal(false)
   }, [])
 
-  const currentChan = currentChannel !== null ? channels.get(currentChannel) : null
-
   const typingNames = useMemo(() => {
     if (typing.size === 0) return []
     const out: string[] = []
@@ -639,19 +764,27 @@ export function Irc() {
   if (chatError) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center">
-        <div className="flex flex-col items-center gap-4 max-w-sm text-center px-4">
+        <div className="flex flex-col items-center gap-4 max-w-md text-center px-4">
           <div className="text-slate-200 text-sm font-medium">{chatError}</div>
           <button
             onClick={() => {
-              clearSsoBudget()
-              setChatError(null)
-              setLoading(true)
-              window.location.reload()
+              // Full sign-out: clears session + SSO budget,
+              // then forces a fresh SSO redirect. This fixes
+              // the case where a stale token was locking the
+              // user out — just reloading would try the same
+              // bad token again.
+              fullSignOut()
+              window.location.href = 'https://www.kodingvibes.com/api/sso/irc-token'
             }}
             className="px-4 py-2 rounded-lg bg-indigo-500 hover:bg-indigo-400 text-white text-sm font-medium transition-colors"
           >
             Reintentar
           </button>
+          <DebugCopyButton label="Copiar info de debug" />
+          <p className="text-slate-500 text-xs leading-relaxed">
+            Si seguís sin poder entrar, copiá la info de debug y mandánosla.
+            No incluye tu contraseña ni el token completo.
+          </p>
         </div>
       </div>
     )
@@ -796,7 +929,6 @@ export function Irc() {
                 nickMap={nickMap}
                 sendViaWs={(msg) => clientRef.current?.sendRaw(msg)}
                 onVoiceMessage={onVoiceMessage}
-                onLeave={() => setActiveVoiceChannelId(null)}
                 onSendMessage={(chId, content) => clientRef.current?.sendMessage(chId, content).catch(() => {})}
               />
             )
@@ -821,9 +953,28 @@ export function Irc() {
                 onForward={handleForward}
                 onBuzz={handleBuzz}
                 onCopyText={handleCopyText}
+                onCopyImage={handleCopyImage}
+                onDownloadImage={handleDownloadImage}
+                onDownloadAttachment={handleDownloadAttachment}
+                onCopyLink={handleCopyLink}
                 onHide={async (messageId) => {
                   try {
-                    await clientRef.current?.api('POST', `/api/chat/messages/${messageId}/hide`)
+                    // Optimistic: mark hidden locally before the
+                    // round-trip. The server's WS broadcast
+                    // (which includes the sender) will confirm.
+                    const c = clientRef.current
+                    if (c) {
+                      for (const ch of c.channels.values()) {
+                        const idx = ch.messages.findIndex(m => m.id === messageId)
+                        if (idx >= 0) {
+                          const newMessages = ch.messages.slice()
+                          newMessages[idx] = { ...ch.messages[idx], hidden: true }
+                          c.channels.set(ch.id, { ...ch, messages: newMessages })
+                          break
+                        }
+                      }
+                    }
+                    await c?.api('POST', `/api/chat/messages/${messageId}/hide`)
                     pushToast('Mensaje oculto', 'join')
                   } catch (err) {
                     pushToast(`Error al ocultar: ${(err as Error).message}`, 'error')
@@ -831,7 +982,22 @@ export function Irc() {
                 }}
                 onDelete={async (messageId) => {
                   try {
-                    await clientRef.current?.api('DELETE', `/api/chat/messages/${messageId}`)
+                    // Optimistic: hide the message locally before
+                    // the round-trip. The server's WS broadcast
+                    // (which includes the sender) will confirm.
+                    const c = clientRef.current
+                    if (c) {
+                      for (const ch of c.channels.values()) {
+                        const idx = ch.messages.findIndex(m => m.id === messageId)
+                        if (idx >= 0) {
+                          const newMessages = ch.messages.slice()
+                          newMessages[idx] = { ...ch.messages[idx], hidden: true, content: '[eliminado]' }
+                          c.channels.set(ch.id, { ...ch, messages: newMessages })
+                          break
+                        }
+                      }
+                    }
+                    await c?.api('DELETE', `/api/chat/messages/${messageId}`)
                     pushToast('Mensaje eliminado', 'join')
                   } catch (err) {
                     pushToast(`Error al eliminar: ${(err as Error).message}`, 'error')
@@ -1006,5 +1172,30 @@ export function Irc() {
         onClose={closeFloatingVideo}
       />
     </div>
+  )
+}
+
+function DebugCopyButton({ label }: { label: string }) {
+  const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle')
+  return (
+    <button
+      type="button"
+      onClick={async () => {
+        const text = JSON.stringify(takeSnapshot(), null, 2)
+        try {
+          await navigator.clipboard.writeText(text)
+          setState('copied')
+        } catch {
+          setState('failed')
+          // Fallback: open a prompt with the JSON so the user can
+          // manually copy from there if the Clipboard API is blocked.
+          window.prompt('Copiá este JSON (Ctrl/Cmd+A, Ctrl/Cmd+C):', text)
+        }
+        setTimeout(() => setState('idle'), 2500)
+      }}
+      className="px-3 py-1.5 rounded-md border border-slate-700 hover:border-slate-500 bg-slate-900 hover:bg-slate-800 text-slate-300 text-xs font-mono transition-colors"
+    >
+      {state === 'copied' ? '¡Copiado!' : state === 'failed' ? 'No se pudo copiar' : label}
+    </button>
   )
 }

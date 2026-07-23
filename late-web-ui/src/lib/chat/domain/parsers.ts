@@ -22,34 +22,69 @@ export function getAttachmentMarker(content: string): { marker: string; id: stri
   return null
 }
 
+const IMAGE_PREFIX = '__late_image__:'
+const IMAGE_PREFIX_FALLBACK = 'late_image__:'
+const IMAGES_PREFIX = '__late_images__:'
+const IMAGES_PREFIX_FALLBACK = 'late_images__:'
+
+const ALL_IMAGE_MARKERS = [IMAGE_PREFIX, IMAGE_PREFIX_FALLBACK, IMAGES_PREFIX, IMAGES_PREFIX_FALLBACK]
+
 export function hasImageMarker(content: string): boolean {
-  return content.startsWith('__late_image__:')
+  return ALL_IMAGE_MARKERS.some(m => content.includes(m))
+}
+
+function findImageMarker(content: string): { marker: string; pos: number; prefixLen: number } | null {
+  for (const m of ALL_IMAGE_MARKERS) {
+    const idx = content.indexOf(m)
+    if (idx !== -1) return { marker: m, pos: idx, prefixLen: m.length }
+  }
+  return null
 }
 
 export function extractImageUrl(content: string): string | null {
-  if (!hasImageMarker(content)) return null
-  const rest = content.slice('__late_image__:'.length).trim()
-  if (!rest) return null
-  const parts = rest.split(/\s+/)
-  return parts[0] || null
-}
-
-export function extractImageUrls(content: string): string[] {
-  if (!hasImageMarker(content)) return []
-  const rest = content.slice('__late_image__:'.length).trim()
-  if (!rest) return []
-  const parts = rest.split(/\s+/)
-  return parts.filter(Boolean)
+  let idx = content.indexOf(IMAGE_PREFIX)
+  let prefixLen = IMAGE_PREFIX.length
+  if (idx === -1) {
+    idx = content.indexOf(IMAGE_PREFIX_FALLBACK)
+    if (idx === -1) return null
+    prefixLen = IMAGE_PREFIX_FALLBACK.length
+  }
+  return content.slice(idx + prefixLen)
 }
 
 export function extractImageCaption(content: string): string | null {
-  if (!hasImageMarker(content)) return null
-  const rest = content.slice('__late_image__:'.length).trim()
-  if (!rest) return null
-  const parts = rest.split(/\s+/)
-  return parts.length > 1 ? parts.slice(1).join(' ') : null
+  let idx = content.indexOf(IMAGE_PREFIX)
+  if (idx === -1) {
+    idx = content.indexOf(IMAGE_PREFIX_FALLBACK)
+    if (idx === -1) idx = findImagesPrefixPos(content)
+  }
+  if (idx === -1) return null
+  if (idx <= 0) return null
+  return content.slice(0, idx).replace(/\n+$/, '')
+}
+
+function findImagesPrefixPos(content: string): number {
+  const i1 = content.indexOf(IMAGES_PREFIX)
+  if (i1 !== -1) return i1
+  return content.indexOf(IMAGES_PREFIX_FALLBACK)
+}
+
+export function extractImageUrls(content: string): string[] {
+  const found = findImageMarker(content)
+  if (!found) return []
+  const rest = content.slice(found.pos + found.prefixLen)
+  try {
+    const parsed = JSON.parse(rest)
+    if (Array.isArray(parsed)) return parsed.filter((u): u is string => typeof u === 'string')
+    return []
+  } catch {
+    return []
+  }
 }
 
 export function extractImagesCaption(content: string): string | null {
-  return extractImageCaption(content)
+  const idx = findImagesPrefixPos(content)
+  if (idx === -1) return extractImageCaption(content)
+  if (idx <= 0) return null
+  return content.slice(0, idx).replace(/\n+$/, '')
 }

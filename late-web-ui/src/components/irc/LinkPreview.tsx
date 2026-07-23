@@ -1,4 +1,4 @@
-import type { OgData } from '../../lib/irc/types'
+import type { OgData } from '../../lib/chat/domain/types'
 
 interface LinkPreviewProps {
   og: OgData

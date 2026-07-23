@@ -47,8 +47,8 @@ async def chat_ws(ws: WebSocket, token: str = None):
                 elif t == "voice.join":
                     room_id = msg.get("roomId", "lobby")
                     await voice_rooms.join(user_id, room_id)
-                    peers = await voice_rooms.peers(user_id)
-                    await ws.send_text(json.dumps({"type": "voice.peers", "data": {"peers": list(peers)}}))
+                    peers = await voice_rooms.peers_with_names(user_id)
+                    await ws.send_text(json.dumps({"type": "voice.peers", "data": {"peers": peers}}))
                     await voice_rooms.broadcast(user_id, {"type": "voice.peer_joined", "data": {"user_id": user_id, "display_name": session["display_name"]}})
                 elif t == "voice.leave":
                     await voice_rooms.leave(user_id)

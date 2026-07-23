@@ -1,10 +1,10 @@
 import { useRef, useEffect, useLayoutEffect, useState, useCallback, useMemo } from 'react'
-import { marked } from 'marked'
-import DOMPurify from 'dompurify'
 import { CornerUpRight } from 'lucide-react'
-import type { ChatMessage } from '../../lib/irc/types'
+import type { ChatMessage } from '../../lib/chat/domain/types'
 import { getNickColor } from '../../lib/irc/colors'
-import ImagePreview, { ImageGallery, ImageLightbox, extractImageUrl, extractImageCaption, hasImageMarker, extractImageUrls, extractImagesCaption } from './ImagePreview'
+import { getAttachmentMarker, hasImageMarker, extractImageUrl, extractImageCaption, extractImageUrls, extractImagesCaption } from '../../lib/chat/domain/parsers'
+import { inlineMarkdown } from '../../lib/chat/domain/markdown'
+import ImagePreview, { ImageGallery, ImageLightbox } from './ImagePreview'
 import LinkPreview from './LinkPreview'
 import RichText from './RichText'
 import MessageContextMenu, { useContextMenuState } from './MessageContextMenu'
@@ -12,41 +12,14 @@ import AttachmentCard from './AttachmentCard'
 import AudioWaveform from './AudioWaveform'
 import MessageReactions from './MessageReactions'
 import VoiceNotePlayer from './VoiceNotePlayer'
+import LazyMount from './LazyMount'
 import './irc.css'
-
-const ATTACHMENT_MARKERS = ['__late_audio__:', '__late_video__:', '__late_document__:', '__late_file__:', '__late_voicenote__:']
-
-function getAttachmentMarker(content: string): { marker: string; id: string; kind: string } | null {
-  for (const marker of ATTACHMENT_MARKERS) {
-    const idx = content.indexOf(marker)
-    if (idx >= 0) {
-      const id = content.slice(idx + marker.length).trim()
-      const kind = marker.replace('__late_', '').replace('__:', '').replace(':', '')
-      return { marker, id, kind }
-    }
-  }
-  return null
-}
-
-/**
- * Inline-only markdown renderer for IRC actions and the like:
- * no <p> wrapper, no block elements, just inline emphasis /
- * code / links rendered as a flat string of HTML. The output
- * is sanitized through DOMPurify before reaching the DOM.
- */
-function inlineMarkdown(text: string): string {
-  const raw = marked.parseInline(text, { gfm: true, breaks: true }) as string
-  return DOMPurify.sanitize(raw, {
-    ALLOWED_TAGS: ['strong', 'em', 'del', 'code', 'a', 'br'],
-    ALLOWED_ATTR: ['href', 'title', 'target', 'rel'],
-  })
-}
 
 interface MessageListProps {
   messages: ChatMessage[]
   currentNick: string
   channelName: string
-  channelMembers?: { id: number; display_name: string }[]
+  channelMembers?: { id: number; display_name: string; active?: boolean }[]
   /** Map of user_id -> current display_name. */
   nickByUserId?: Map<number, string>
   /** The local user's id. */
@@ -71,6 +44,14 @@ interface MessageListProps {
   onHide?: (messageId: number) => void
   /** Delete a message. Admin/mod only. */
   onDelete?: (messageId: number) => void
+  /** Copy an image message to the clipboard. */
+  onCopyImage?: (message: ChatMessage) => void
+  /** Download an image message. */
+  onDownloadImage?: (message: ChatMessage) => void
+  /** Download a non-image attachment (audio/video/document). */
+  onDownloadAttachment?: (message: ChatMessage) => void
+  /** Copy the link to an attachment to the clipboard. */
+  onCopyLink?: (message: ChatMessage) => void
   /** Called when a user clicks the float button on a video. */
   onVideoFloat?: (attachmentId: string) => void
   /** Called when a video starts playing. */
@@ -169,9 +150,9 @@ function ReplyBlock({ message }: { message: ChatMessage }) {
           const single = urls.length === 1 ? toUrl(urls[0]) : (() => { const e = extractImageUrl(raw); return e ? toUrl(e) : null })()
           return single ? <img src={single} alt="" className="h-10 w-10 rounded object-cover mt-0.5" loading="lazy" /> : null
         })() : att?.kind === 'voicenote' ? (
-          <div className="mt-0.5"><VoiceNotePlayer noteId={att.id} /></div>
+          <div className="mt-0.5"><LazyMount minHeight={56}><VoiceNotePlayer noteId={att.id} /></LazyMount></div>
         ) : att?.kind === 'audio' ? (
-          <div className="mt-0.5"><AudioWaveform src={`/api/chat/attachments/${att.id}`} /></div>
+          <div className="mt-0.5"><LazyMount minHeight={56}><AudioWaveform src={`/api/chat/attachments/${att.id}`} /></LazyMount></div>
         ) : att ? (
           <p className="text-[12px] text-slate-400 truncate">📎 {att.kind}</p>
         ) : raw && <p className="text-[13px] text-slate-400 truncate">{raw}</p>}
@@ -204,7 +185,7 @@ function ContentBlock({ message, members, isOwn, onVideoFloat, onVideoPlay, onVi
   const att = getAttachmentMarker(m.content)
   if (att) {
     const caption = extractImageCaption(m.content)
-    if (att.kind === 'voicenote') return <VoiceNotePlayer noteId={att.id} />
+    if (att.kind === 'voicenote') return <LazyMount minHeight={56}><VoiceNotePlayer noteId={att.id} /></LazyMount>
     return <>{caption && <RichText text={caption} members={members} isOwn={isOwn} />}<AttachmentCard attachmentId={att.id} onFloat={onVideoFloat} onVideoPlay={onVideoPlay} onVideoRef={onVideoRef} floatingVideo={floatingVideo} /></>
   }
   if (hasImageMarker(m.content)) return null
@@ -246,11 +227,14 @@ function ActionRow({ m, nick, handleTouchStart, clearTouchTimer, onContextMenu }
   )
 }
 
-function ImageRow({ m, nick, isOwn, showHeader, handleTouchStart, clearTouchTimer, onContextMenu, onImageOpen }: {
+function ImageRow({ m, nick, isOwn, showHeader, handleTouchStart, clearTouchTimer, onContextMenu, onImageOpen, nickByUserId, myUserId, onToggleReaction }: {
   m: ChatMessage; nick: string; isOwn: boolean; showHeader: boolean
   handleTouchStart: (e: React.TouchEvent) => void; clearTouchTimer: () => void
   onContextMenu?: (msg: ChatMessage, x: number, y: number) => void
   onImageOpen?: (images: string[], index: number) => void
+  nickByUserId?: Map<number, string>
+  myUserId?: number | null
+  onToggleReaction?: (messageId: number, emoji: string) => void
 }) {
   const multi = extractImageUrls(m.content)
   let allImages: string[] = []
@@ -294,6 +278,14 @@ function ImageRow({ m, nick, isOwn, showHeader, handleTouchStart, clearTouchTime
             <ImagePreview dataUrl={allImages[0]} onOpen={() => onImageOpen!(allImages, 0)} />
           ) : (
             <ImageGallery images={allImages} onOpen={(idx) => onImageOpen!(allImages, idx)} />
+          )}
+          {m.reactions && m.reactions.length > 0 && nickByUserId && (
+            <MessageReactions
+              reactions={m.reactions}
+              myUserId={myUserId ?? null}
+              nickByUserId={nickByUserId}
+              onToggle={(emoji) => onToggleReaction?.(m.id, emoji)}
+            />
           )}
         </div>
         <span className="text-[10px] text-slate-500 tabular-nums mt-0.5 px-1 opacity-100 sm:opacity-0 sm:group-hover/msg:opacity-100">
@@ -366,7 +358,7 @@ function BubbleMessage({ m, nick, isOwn, showHeader, isNew, members, nickByUserI
         </div>
         {onLinkOpen && m.og_data && (
           <div className={linkContainerClass}>
-            <LinkPreview key={`og-${m.id}`} og={m.og_data} onOpen={onLinkOpen} />
+            <LazyMount minHeight={80}><LinkPreview key={`og-${m.id}`} og={m.og_data} onOpen={onLinkOpen} /></LazyMount>
           </div>
         )}
         <span className="text-[10px] text-slate-500 tabular-nums mt-0.5 px-1 opacity-100 sm:opacity-0 sm:group-hover/msg:opacity-100">
@@ -423,7 +415,7 @@ function MessageRow({
   }
 
   if (isImage && onImageOpen) {
-    return <ImageRow m={m} nick={nick} isOwn={isOwn} showHeader={showHeader} handleTouchStart={handleTouchStart} clearTouchTimer={clearTouchTimer} onContextMenu={onContextMenu} onImageOpen={onImageOpen} />
+    return <ImageRow m={m} nick={nick} isOwn={isOwn} showHeader={showHeader} handleTouchStart={handleTouchStart} clearTouchTimer={clearTouchTimer} onContextMenu={onContextMenu} onImageOpen={onImageOpen} nickByUserId={nickByUserId} myUserId={myUserId} onToggleReaction={onToggleReaction} />
   }
 
   return <BubbleMessage m={m} nick={nick} isOwn={isOwn} showHeader={showHeader} isNew={isNew} members={members} nickByUserId={nickByUserId} myUserId={myUserId} onLinkOpen={onLinkOpen} onToggleReaction={onToggleReaction} onVideoFloat={onVideoFloat} onVideoPlay={onVideoPlay} onVideoRef={onVideoRef} floatingVideo={floatingVideo} handleTouchStart={handleTouchStart} clearTouchTimer={clearTouchTimer} onContextMenu={onContextMenu} />
@@ -431,7 +423,7 @@ function MessageRow({
 
 export default function MessageList({
   messages, currentNick, channelName, channelMembers, nickByUserId, myUserId, myRole, onToggleReaction,
-  onLoadMore, loadingMore, hasMore, onReply, onBuzz, onCopyText, onForward, onHide, onDelete,
+  onLoadMore, loadingMore, hasMore, onReply, onBuzz, onCopyText, onForward, onHide, onDelete, onCopyImage, onDownloadImage, onDownloadAttachment, onCopyLink,
   onVideoFloat, onVideoPlay, onVideoRef, floatingVideo,
 }: MessageListProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -546,15 +538,11 @@ export default function MessageList({
     }
     // Deferred second scroll: catches any layout that
     // resolves after the first scroll (images loading,
-    // markdown rendering, etc.). Two rAFs because the first
-    // rAF fires before the new commit's layout is fully
-    // resolved in some browsers.
+    // markdown rendering, etc.).
     const raf1 = requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        const el2 = containerRef.current
-        if (el2) el2.scrollTop = el2.scrollHeight
-        bottomRef.current?.scrollIntoView({ block: 'end' })
-      })
+      const el2 = containerRef.current
+      if (el2) el2.scrollTop = el2.scrollHeight
+      bottomRef.current?.scrollIntoView({ block: 'end' })
     })
     return () => {
       cancelAnimationFrame(raf1)
@@ -573,9 +561,18 @@ export default function MessageList({
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
+    // Follow the bottom when the user is near it or sent the
+    // last message. Read proximity directly from the DOM (not
+    // from React state) because the state lags: when content
+    // grows, the browser fires a scroll event with the old
+    // scrollTop before our resize handler runs, which would
+    // flip atBottom to false and stop us from following.
     const observer = new ResizeObserver(() => {
-      const follow = atBottomRef.current || lastIsOwnRef.current
+      const distance = el.scrollHeight - el.scrollTop - el.clientHeight
+      const nearBottom = distance < 200
+      const follow = nearBottom || lastIsOwnRef.current
       if (follow) {
+        el.scrollTop = el.scrollHeight
         bottomRef.current?.scrollIntoView({ block: 'end' })
       }
     })
@@ -668,8 +665,11 @@ export default function MessageList({
             || hasImageMarker(prev.message.content) !== hasImageMarker(item.message.content)
             || item.message.created_at - prev.message.created_at > HEADER_INTERVAL_S
           return (
-            <MessageRow
+            <div
               key={`b-${id}`}
+              style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 80px' }}
+            >
+            <MessageRow
               message={item.message}
               showHeader={showHeader}
               isOwn={item.isOwn}
@@ -679,13 +679,17 @@ export default function MessageList({
               myUserId={myUserId}
               onImageOpen={(images, idx) => setLightbox({ images, index: idx })}
               onLinkOpen={openLink}
-              onContextMenu={(msg, x, y) => setContextMenu({ show: true, x, y, message: msg, isOwn: item.isOwn })}
+              onContextMenu={(msg, x, y) => {
+                const target = channelMembers?.find(m => m.id === msg.user_id)
+                setContextMenu({ show: true, x, y, message: msg, isOwn: item.isOwn, isTargetOnline: target?.active ?? false })
+              }}
               onToggleReaction={onToggleReaction}
               onVideoFloat={onVideoFloat}
               onVideoPlay={onVideoPlay}
               onVideoRef={onVideoRef}
               floatingVideo={floatingVideo}
             />
+            </div>
           )
         })}
         <div ref={bottomRef} className="h-1" />
@@ -723,6 +727,10 @@ export default function MessageList({
         myRole={myRole}
         onHide={onHide}
         onDelete={onDelete}
+        onCopyImage={onCopyImage}
+        onDownloadImage={onDownloadImage}
+        onDownloadAttachment={onDownloadAttachment}
+        onCopyLink={onCopyLink}
       />
     </div>
   )

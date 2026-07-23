@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useEffect, useRef, useCallback, ReactNode } from 'react'
+import { loadCurrent, loadWasPlaying, loadVolume, loadMuted, saveVolume, saveMuted, saveCurrent, savePlaying } from './persistence'
 
 export type StreamInfo = {
   name: string
@@ -40,25 +41,6 @@ export function useAudio() {
   const ctx = useContext(AudioCtx)
   if (!ctx) throw new Error('useAudio must be used within <AudioProvider>')
   return ctx
-}
-
-const VOLUME_KEY = 'late.audio.volume'
-const MUTED_KEY = 'late.audio.muted'
-const CURRENT_KEY = 'late.audio.current'
-const PLAYING_KEY = 'late.audio.playing'
-
-function loadCurrent(): StreamInfo | null {
-  try {
-    const raw = localStorage.getItem(CURRENT_KEY)
-    if (!raw) return null
-    return JSON.parse(raw) as StreamInfo
-  } catch { return null }
-}
-
-function loadWasPlaying(): boolean {
-  try {
-    return localStorage.getItem(PLAYING_KEY) === '1'
-  } catch { return false }
 }
 
 // Module-level singletons so the <audio> element, the AudioContext, and
@@ -104,15 +86,12 @@ function ensureAnalyser(): AnalyserNode | null {
 }
 
 export function AudioProvider({ children }: { children: ReactNode }) {
-  const [current, setCurrent] = useState<StreamInfo | null>(() => loadCurrent())
+  const [current, setCurrent] = useState<StreamInfo | null>(() => loadCurrent<StreamInfo>())
   const [track, setTrack] = useState<TrackMeta | null>(null)
   const [playing, setPlaying] = useState(false)
   const [loading, setLoading] = useState(false)
-  const [volume, setVolumeState] = useState(() => {
-    const v = localStorage.getItem(VOLUME_KEY)
-    return v ? Number(v) : 0.7
-  })
-  const [muted, setMuted] = useState(() => localStorage.getItem(MUTED_KEY) === '1')
+  const [volume, setVolumeState] = useState(() => loadVolume())
+  const [muted, setMuted] = useState(() => loadMuted())
   const wasPlaying = useRef(loadWasPlaying())
 
   const ensureAudioEl = useCallback(() => {
@@ -130,7 +109,7 @@ export function AudioProvider({ children }: { children: ReactNode }) {
   // happens — they have to hit play themselves.
   useEffect(() => {
     if (!wasPlaying.current) return
-    const c = loadCurrent()
+    const c: StreamInfo | null = loadCurrent<StreamInfo>()
     if (!c) return
     wasPlaying.current = false
     setCurrent(c)
@@ -179,11 +158,11 @@ export function AudioProvider({ children }: { children: ReactNode }) {
     } else {
       ensureAnalyser()
     }
-    localStorage.setItem(PLAYING_KEY, '1')
+    savePlaying(true)
     a.play().catch(() => {
       setPlaying(false)
       setLoading(false)
-      localStorage.setItem(PLAYING_KEY, '0')
+      savePlaying(false)
     })
   }, [ensureAudioEl])
 
@@ -198,13 +177,13 @@ export function AudioProvider({ children }: { children: ReactNode }) {
         sharedAudio.src = current.url
       }
       if (sharedCtx) sharedCtx.resume().catch(() => {})
-      localStorage.setItem(PLAYING_KEY, '1')
+      savePlaying(true)
       sharedAudio.play().catch(() => {
-        localStorage.setItem(PLAYING_KEY, '0')
+        savePlaying(false)
       })
     } else {
       sharedAudio.pause()
-      localStorage.setItem(PLAYING_KEY, '0')
+      savePlaying(false)
     }
   }, [current])
 
@@ -215,7 +194,8 @@ export function AudioProvider({ children }: { children: ReactNode }) {
     setCurrent(null)
     setTrack(null)
     setPlaying(false)
-    localStorage.setItem(PLAYING_KEY, '0')
+    savePlaying(false)
+    saveCurrent(null)
   }, [])
 
   const getAudioElement = () => sharedAudio
@@ -224,14 +204,14 @@ export function AudioProvider({ children }: { children: ReactNode }) {
   const setVolume = useCallback((v: number) => {
     const clamped = Math.max(0, Math.min(1, v))
     setVolumeState(clamped)
-    localStorage.setItem(VOLUME_KEY, String(clamped))
+    saveVolume(clamped)
     if (sharedAudio && !muted) sharedAudio.volume = clamped
   }, [muted])
 
   const toggleMute = useCallback(() => {
     setMuted(prev => {
       const next = !prev
-      localStorage.setItem(MUTED_KEY, next ? '1' : '0')
+      saveMuted(next)
       if (sharedAudio) sharedAudio.volume = next ? 0 : volume
       return next
     })
@@ -241,14 +221,14 @@ export function AudioProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (listenersWired) return
     const a = ensureSharedAudio(
-      Number(localStorage.getItem(VOLUME_KEY)) || 0.7,
-      localStorage.getItem(MUTED_KEY) === '1',
+      loadVolume(),
+      loadMuted(),
     )
-    const onPlaying = () => { setPlaying(true); setLoading(false); localStorage.setItem(PLAYING_KEY, '1') }
-    const onPause = () => { setPlaying(false); localStorage.setItem(PLAYING_KEY, '0') }
+    const onPlaying = () => { setPlaying(true); setLoading(false); savePlaying(true) }
+    const onPause = () => { setPlaying(false); savePlaying(false) }
     const onWaiting = () => setLoading(true)
     const onCanPlay = () => setLoading(false)
-    const onError = () => { setPlaying(false); setLoading(false); localStorage.setItem(PLAYING_KEY, '0') }
+    const onError = () => { setPlaying(false); setLoading(false); savePlaying(false) }
     a.addEventListener('playing', onPlaying)
     a.addEventListener('pause', onPause)
     a.addEventListener('waiting', onWaiting)
@@ -269,8 +249,7 @@ export function AudioProvider({ children }: { children: ReactNode }) {
   // explicitly from play/toggle/stop because we need it set
   // synchronously with the gesture, not after a render.
   useEffect(() => {
-    if (current) localStorage.setItem(CURRENT_KEY, JSON.stringify(current))
-    else localStorage.removeItem(CURRENT_KEY)
+    saveCurrent(current)
   }, [current])
 
   return (

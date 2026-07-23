@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react'
 import { X, Hash, CornerUpRight } from 'lucide-react'
-import type { ChannelState, ChatMessage } from '../../lib/irc/types'
-import { hasImageMarker } from './ImagePreview'
+import type { ChannelState, ChatMessage } from '../../lib/chat/domain/types'
+import { hasImageMarker } from '../../lib/chat/domain/parsers'
 
 interface ForwardModalProps {
   message: ChatMessage
