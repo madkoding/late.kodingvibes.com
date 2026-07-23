@@ -175,17 +175,10 @@ export function Irc() {
     document.addEventListener('visibilitychange', onVisible)
     window.addEventListener('focus', onVisible)
     window.addEventListener('pageshow', onVisible)
-    // 30s poll while tab is visible — keeps the active list honest
-    // in quiet channels where no message ever fires scheduleOnlineRefresh.
-    const tick = () => {
-      if (document.visibilityState === 'visible') refreshOnline.current()
-    }
-    const id = setInterval(tick, 30000)
     return () => {
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('focus', onVisible)
       window.removeEventListener('pageshow', onVisible)
-      clearInterval(id)
     }
   }, [])
 

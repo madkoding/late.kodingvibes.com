@@ -272,24 +272,31 @@ export class ChatClient {
         const ch = this.channels.get(Number(data.room_id))
         if (ch) { ch.voiceParticipants = data.count; this.emitState({ channels: new Map(this.channels) }) }
       }],
-      ['presence.join', (msg) => {
-        const data = msg.data as { user_id: number; channel_ids: number[] }
-        this.applyPresence(data.user_id, data.channel_ids, true)
-      }],
-      ['presence.leave', (msg) => {
-        const data = msg.data as { user_id: number; channel_ids: number[] }
-        this.applyPresence(data.user_id, data.channel_ids, false)
+      ['presence.online', (msg) => {
+        const data = msg.data as { user_id: number; online: boolean }
+        this.applyPresence(data.user_id, data.online)
       }],
     ])
   }
 
-  /** Re-fetch the channels list and the members of the current channel
-   *  so the active flag and activeCount reflect the join/leave without
-   *  trusting a local delta. The server is the only source of truth. */
-  private applyPresence(_userId: number, _channelIds: number[], _active: boolean) {
-    void this.refreshChannels().catch(() => {})
-    const cur = this.currentChannelId
-    if (cur !== null) void this.loadMembers(cur).catch(() => {})
+  /** Update the local `active` flag and per-channel activeCount for
+   *  `userId` across every channel we already know about. If the user
+   *  is not in any loaded channel's member list, this is a no-op. */
+  private applyPresence(userId: number, online: boolean) {
+    let changed = false
+    for (const ch of this.channels.values()) {
+      if (!ch.members) continue
+      const idx = ch.members.findIndex(m => m.id === userId)
+      if (idx >= 0 && ch.members[idx].active !== online) {
+        const newMembers = ch.members.slice()
+        newMembers[idx] = { ...newMembers[idx], active: online }
+        ch.members = newMembers
+        const cur = ch.activeCount ?? 0
+        ch.activeCount = Math.max(0, cur + (online ? 1 : -1))
+        changed = true
+      }
+    }
+    if (changed) this.emitState({ channels: new Map(this.channels) })
   }
 
   async start(): Promise<void> {

@@ -25,11 +25,9 @@ async def chat_ws(ws: WebSocket, token: str = None):
         await ws.close(code=4401)
         return
     user_id = session["user_id"]
-    with db() as conn:
-        channel_ids = [r["id"] for r in conn.execute(
-            "SELECT id FROM channel_members WHERE user_id = ?", (user_id,)
-        ).fetchall()]
-    await ws_manager.connect(user_id, ws, channel_ids)
+    became_online = await ws_manager.connect(user_id, ws)
+    if became_online:
+        await ws_manager.broadcast_online(user_id, True)
     try:
         await ws.send_text(json.dumps({"type": "hello", "user": {"id": user_id, "display_name": session["display_name"]}}))
         while True:
@@ -97,5 +95,7 @@ async def chat_ws(ws: WebSocket, token: str = None):
     except WebSocketDisconnect:
         pass
     finally:
-        await ws_manager.disconnect(user_id, ws, channel_ids)
+        became_offline = await ws_manager.disconnect(user_id, ws)
+        if became_offline:
+            await ws_manager.broadcast_online(user_id, False)
         await voice_rooms.leave(user_id)
