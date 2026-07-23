@@ -8,16 +8,38 @@ def list_channels(user_id: int) -> list[dict]:
         conn.execute("UPDATE users SET last_seen = ? WHERE id = ?", (int(time.time()), user_id))
         rows = conn.execute("""
             SELECT c.*,
+                EXISTS(SELECT 1 FROM channel_members WHERE channel_id = c.id AND user_id = ?) AS joined,
                 (SELECT COUNT(*) FROM channel_members WHERE channel_id = c.id) AS member_count,
                 (SELECT id FROM messages WHERE channel_id = c.id ORDER BY id DESC LIMIT 1) AS last_message_id,
                 (SELECT content FROM messages WHERE channel_id = c.id ORDER BY id DESC LIMIT 1) AS last_message_content,
                 (SELECT created_at FROM messages WHERE channel_id = c.id ORDER BY id DESC LIMIT 1) AS last_message_at
             FROM channels c
             WHERE c.id IN (SELECT channel_id FROM channel_members WHERE user_id = ?)
+               OR c.is_public = 1
             ORDER BY c.name
-        """, (user_id,)).fetchall()
+        """, (user_id, user_id)).fetchall()
         channels = []
         for r in rows:
+            joined = bool(r["joined"])
+            ch_dict = dict(r)
+            if not joined:
+                channels.append({
+                    "id": ch_dict["id"],
+                    "name": ch_dict["name"],
+                    "description": ch_dict["description"],
+                    "is_public": bool(ch_dict["is_public"]),
+                    "channel_type": ch_dict.get("channel_type", "text"),
+                    "category_id": ch_dict["category_id"],
+                    "position": ch_dict["position"],
+                    "member_count": ch_dict["member_count"],
+                    "active_count": 0,
+                    "voice_participants": 0,
+                    "unread": 0,
+                    "my_role": None,
+                    "last_message": None,
+                    "joined": False,
+                })
+                continue
             member_uids = [
                 m["user_id"] for m in conn.execute(
                     "SELECT user_id FROM channel_members WHERE channel_id = ?", (r["id"],)
@@ -58,6 +80,7 @@ def list_channels(user_id: int) -> list[dict]:
                     "content": r["last_message_content"],
                     "created_at": r["last_message_at"],
                 } if r["last_message_id"] else None,
+                "joined": True,
             })
     return channels
 

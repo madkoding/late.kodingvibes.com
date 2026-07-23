@@ -56,6 +56,22 @@ def test_list_channels_includes_last_message(consume_admin_slot, make_session):
         assert "last_message" in c
 
 
+def test_list_channels_includes_public_unjoined(consume_admin_slot, make_session):
+    _, user = make_session()
+    # Create a public channel from a different user; the test user doesn't join.
+    _, other = make_session(sub="other-sub", email="other@example.com", name="Other")
+    create_channel("#discoverable", "Public", True, other["id"])
+    chans = list_channels(user["id"])
+    by_name = {c["name"]: c for c in chans}
+    assert "#discoverable" in by_name
+    assert by_name["#discoverable"]["joined"] is False
+    assert by_name["#discoverable"]["my_role"] is None
+    assert by_name["#discoverable"]["unread"] == 0
+    # Joined channels must still carry joined=True.
+    for name in ("#lobby", "#random", "#dev", "#infra"):
+        assert by_name[name]["joined"] is True
+
+
 def test_join_channel(consume_admin_slot, make_session):
     _, user = make_session()
     ch = create_channel("#jointest", "Join test", True, user["id"])
