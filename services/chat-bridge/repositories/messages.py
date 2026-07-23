@@ -187,12 +187,12 @@ def list_messages(channel_id: int, before: int | None = None, limit: int = 50) -
 
 def hide_message(message_id: int):
     with db() as conn:
-        conn.execute("UPDATE messages SET hidden = 1 WHERE id = ?", (message_id,))
+        conn.execute("UPDATE messages SET hidden = 1, og_data = NULL WHERE id = ?", (message_id,))
 
 
 def delete_message(message_id: int):
     with db() as conn:
-        conn.execute("UPDATE messages SET content = ?, hidden = 1 WHERE id = ?", ("[eliminado]", message_id))
+        conn.execute("UPDATE messages SET content = ?, hidden = 1, og_data = NULL WHERE id = ?", ("[eliminado]", message_id))
 
 
 def get_message(message_id: int) -> dict | None:
