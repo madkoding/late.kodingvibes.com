@@ -7,68 +7,18 @@ from repositories.channels import is_member
 from repositories.receipts import mark_delivered
 from services.broadcaster import ws_manager
 from services.notifications import send_to_kv
+from services.link_preview import extract_urls, fetch_og
 from core.db import db
 import asyncio
-import re
 import json
-import httpx
 import logging
 
 log = logging.getLogger("chat-bridge")
 router = APIRouter()
 
-URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
-
-def extract_urls(content: str) -> list[str]:
-    seen = set()
-    out = []
-    for m in URL_RE.finditer(content):
-        url = m.group(0).rstrip(".,;:!?)")
-        if url in seen:
-            continue
-        seen.add(url)
-        out.append(url)
-        if len(out) >= 3:
-            break
-    return out
-
-async def fetch_og(url: str) -> dict | None:
-    try:
-        async with httpx.AsyncClient(timeout=6, follow_redirects=True, headers={
-            "User-Agent": "Mozilla/5.0 (compatible; late-chat-og/1.0)",
-            "Accept": "text/html,application/xhtml+xml",
-        }) as client:
-            r = await client.get(url)
-    except Exception as e:
-        log.warning(f"OG fetch failed for {url}: {e}")
-        return None
-    if r.status_code >= 400 or "text/html" not in r.headers.get("content-type", ""):
-        return None
-    html = r.text[:200_000]
-    def meta(prop: str) -> str | None:
-        m = re.search(rf'<meta[^>]+(?:property|name)=["\']{re.escape(prop)}["\'][^>]+content=["\']([^"\']*)["\']', html, re.IGNORECASE)
-        if m:
-            return m.group(1).strip()
-        m = re.search(rf'<meta[^>]+content=["\']([^"\']*)["\'][^>]+(?:property|name)=["\']{re.escape(prop)}["\']', html, re.IGNORECASE)
-        return m.group(1).strip() if m else None
-    title = meta("og:title") or meta("twitter:title")
-    if not title:
-        m = re.search(r"<title[^>]*>([^<]+)</title>", html, re.IGNORECASE)
-        if m:
-            title = m.group(1).strip()
-    description = meta("og:description") or meta("twitter:description") or meta("description")
-    image = meta("og:image") or meta("twitter:image")
-    site_name = meta("og:site_name")
-    og = {"url": url}
-    if title: og["title"] = title[:300]
-    if description: og["description"] = description[:500]
-    if image: og["image"] = image
-    if site_name: og["site_name"] = site_name[:120]
-    return og
-
 async def _enrich_og_and_broadcast(msg_id: int, channel_id: int, url: str):
     og = await fetch_og(url)
-    if not og:
+    if og.get("kind") == "error":
         return
     with db() as conn:
         conn.execute("UPDATE messages SET og_data = ? WHERE id = ?", (json.dumps(og), msg_id))
