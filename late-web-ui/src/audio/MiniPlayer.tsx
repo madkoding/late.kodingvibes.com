@@ -1,160 +1,188 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
-import { Play, Pause, Volume2, VolumeX, X, PictureInPicture2, SkipBack, SkipForward } from 'lucide-react'
-import { useAudio } from './AudioProvider'
-import { STREAMS } from '@/lib/streams'
-import { MarqueeLink } from './miniplayer/MarqueeLink'
-import { SpectrumCanvas } from './miniplayer/SpectrumCanvas'
-import { loadPos, savePos, loadCollapsed, saveCollapsed, loadFloating, saveFloating, EXPANDED_W, COLLAPSED_W, DEFAULT_H, defaultPos, clampPos } from './miniplayer/persistence'
+import { useEffect, useRef, useState, useCallback } from "react";
+import { Play, Pause, Volume2, VolumeX, X, PictureInPicture2, SkipBack, SkipForward } from "lucide-react";
+import { useRadioState, useRadioEngine, useRadioStreams } from "@/lib/radio-engine";
+import { MarqueeLink } from "./miniplayer/MarqueeLink";
+import { SpectrumCanvas } from "./miniplayer/SpectrumCanvas";
+
+// ponytail: drag/pin/floating persistence is so small it doesn't deserve
+// its own file. Inlined here; survives refreshes via localStorage.
+const POS_KEY       = "late.miniplayer.pos";
+const COLLAPSED_KEY = "late.miniplayer.collapsed";
+const FLOATING_KEY  = "late.miniplayer.floating";
+const EXPANDED_W    = 360;
+const COLLAPSED_W   = 132;
+const DEFAULT_H     = 56;
+
+function loadPos(): { x: number; y: number } | null {
+  try {
+    const raw = localStorage.getItem(POS_KEY);
+    if (!raw) return null;
+    const p = JSON.parse(raw) as { x: number; y: number };
+    if (typeof p.x === "number" && typeof p.y === "number") return p;
+  } catch { /* ignore */ }
+  return null;
+}
+function savePos(p: { x: number; y: number }) {
+  try { localStorage.setItem(POS_KEY, JSON.stringify(p)); } catch { /* ignore */ }
+}
+function loadCollapsed(): boolean  { try { return localStorage.getItem(COLLAPSED_KEY) === "1"; } catch { return false; } }
+function saveCollapsed(v: boolean) { try { localStorage.setItem(COLLAPSED_KEY, v ? "1" : "0"); } catch { /* ignore */ } }
+function loadFloating(): boolean   { try { return localStorage.getItem(FLOATING_KEY) === "1"; } catch { return false; } }
+function saveFloating(v: boolean)  { try { localStorage.setItem(FLOATING_KEY, v ? "1" : "0"); } catch { /* ignore */ } }
+
+function defaultPos(): { x: number; y: number } {
+  if (typeof window === "undefined") return { x: 16, y: 16 };
+  return { x: Math.max(8, window.innerWidth - EXPANDED_W - 16), y: Math.max(8, window.innerHeight - DEFAULT_H - 16) };
+}
+function clampPos(p: { x: number; y: number }, w: number, h: number): { x: number; y: number } {
+  if (typeof window === "undefined") return p;
+  const maxX = Math.max(0, window.innerWidth - w);
+  const maxY = Math.max(0, window.innerHeight - h);
+  return { x: Math.min(Math.max(0, p.x), maxX), y: Math.min(Math.max(0, p.y), maxY) };
+}
 
 export default function MiniPlayer() {
-  const audio = useAudio()
+  // ponytail: this component lives in the shell (outside the router) so the
+  // user sees it on every route. It only READS window.RadioEngine — the
+  // micro radio is the sole owner of the <audio> element and AudioContext.
+  const state = useRadioState();
+  // Capture the engine in a ref so it never changes identity for the
+  // lifetime of this component. The useRadioEngine() hook can throw
+  // if the micro hasn't loaded yet, and the engine reference itself is
+  // a stable singleton on window — passing it as a dep to useEffect
+  // would cause spurious re-runs only if window.RadioEngine swapped at
+  // runtime, which it never does in production.
+  const engineRef = useRef<ReturnType<typeof useRadioEngine> | null>(null);
+  if (engineRef.current === null) {
+    engineRef.current = useRadioEngine();
+  }
+  const engine = engineRef.current;
+  const streams = useRadioStreams();
 
   // Drag position (desktop only) — top-left corner of the card in viewport space.
   // Always starts with a default position so the player is visible
   // before the first user interaction.
-  const [pos, setPos] = useState<{ x: number; y: number }>(() => loadPos() ?? defaultPos())
-  const [collapsed, setCollapsed] = useState<boolean>(() => loadCollapsed())
-  const [floating, setFloating] = useState<boolean>(() => loadFloating())
-  const dragRef = useRef<{ startX: number; startY: number; origX: number; origY: number; moved: boolean } | null>(null)
+  const [pos, setPos] = useState<{ x: number; y: number }>(() => loadPos() ?? defaultPos());
+  const [collapsed, setCollapsed] = useState<boolean>(() => loadCollapsed());
+  const [floating, setFloating] = useState<boolean>(() => loadFloating());
+  const dragRef = useRef<{ startX: number; startY: number; origX: number; origY: number; moved: boolean } | null>(null);
   const [isDesktop, setIsDesktop] = useState<boolean>(() =>
-    typeof window !== 'undefined' && window.innerWidth >= 640,
-  )
+    typeof window !== "undefined" && window.innerWidth >= 640,
+  );
+
+  const [analyser, setAnalyser] = useState<AnalyserNode | null>(null);
+
+  useEffect(() => { savePos(pos) }, [pos]);
+  useEffect(() => { saveCollapsed(collapsed) }, [collapsed]);
+  useEffect(() => { saveFloating(floating) }, [floating]);
+
+  useEffect(() => {
+    const onResize = () => setIsDesktop(window.innerWidth >= 640);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   // ponytail: state (not ref) so the SpectrumCanvas re-renders when
-  // the analyser becomes available. A ref would update .current
-  // without triggering a render and the canvas would be stuck
-  // with analyser={null} forever.
-  const [analyser, setAnalyser] = useState<AnalyserNode | null>(null)
-
-  // Persist
-  useEffect(() => { savePos(pos) }, [pos])
-  useEffect(() => { saveCollapsed(collapsed) }, [collapsed])
-  useEffect(() => { saveFloating(floating) }, [floating])
-
-  // Track viewport width so we can switch between mobile (pinned to
-  // bottom) and desktop (floating card) layouts.
+  // the analyser becomes available. We only fetch the analyser ONCE
+  // (on mount); subsequent re-renders don't need to re-poll.
   useEffect(() => {
-    const onResize = () => setIsDesktop(window.innerWidth >= 640)
-    window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
-  }, [])
-
-  // Pull the analyser from the shared AudioProvider. Re-run whenever
-  // the current stream changes so a fresh source -> analyser chain is
-  // set up for the new audio src.
-  useEffect(() => {
-    let cancelled = false
+    let cancelled = false;
     const tryAttach = () => {
-      if (cancelled) return true
-      const el = audio.getAudioElement()
-      const a = audio.getAnalyser()
-      if (!el || !a) return false
-      setAnalyser(a)
-      return true
-    }
+      if (cancelled) return true;
+      const el = engine.getAudioElement();
+      const a = engine.getAnalyser();
+      if (!el || !a) return false;
+      setAnalyser(a);
+      return true;
+    };
     if (!tryAttach()) {
       const t = setInterval(() => {
-        if (tryAttach()) clearInterval(t)
-      }, 200)
+        if (tryAttach()) clearInterval(t);
+      }, 200);
       return () => {
-        cancelled = true
-        clearInterval(t)
-      }
+        cancelled = true;
+        clearInterval(t);
+      };
     }
-  }, [audio, audio.current?.mount])
+  }, [engine]);
 
-  // Clamp the persisted position on resize so the card never escapes
-  // the viewport if the window shrinks after the user dragged it.
-  // Only relevant when the card is in floating mode.
-  const isFloating = isDesktop && floating
+  const isFloating = isDesktop && floating;
   useEffect(() => {
-    if (!isFloating) return
-    setPos(p => clampPos(p, collapsed ? COLLAPSED_W : EXPANDED_W, DEFAULT_H))
-  }, [isFloating, collapsed])
+    if (!isFloating) return;
+    setPos(p => clampPos(p, collapsed ? COLLAPSED_W : EXPANDED_W, DEFAULT_H));
+  }, [isFloating, collapsed]);
 
   const onGripPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    e.preventDefault()
-    e.stopPropagation()
-    const card = (e.currentTarget as HTMLElement).parentElement as HTMLElement
-    const r = card.getBoundingClientRect()
-    const cur = { x: r.left, y: r.top }
-    setPos(cur) // make sure the in-memory position matches what the user is grabbing
+    e.preventDefault();
+    e.stopPropagation();
+    const card = (e.currentTarget as HTMLElement).parentElement as HTMLElement;
+    const r = card.getBoundingClientRect();
+    const cur = { x: r.left, y: r.top };
+    setPos(cur);
     dragRef.current = {
       startX: e.clientX,
       startY: e.clientY,
       origX: cur.x,
       origY: cur.y,
       moved: false,
-    }
-    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
-  }, [])
+    };
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  }, []);
 
   const onGripPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    const d = dragRef.current
-    if (!d) return
-    const dx = e.clientX - d.startX
-    const dy = e.clientY - d.startY
-    if (!d.moved && Math.hypot(dx, dy) < 6) return
-    d.moved = true
-    const card = (e.currentTarget as HTMLElement).parentElement as HTMLElement | null
-    const cardW = card?.offsetWidth ?? (collapsed ? COLLAPSED_W : EXPANDED_W)
-    const cardH = card?.offsetHeight ?? DEFAULT_H
-    setPos(clampPos({ x: d.origX + dx, y: d.origY + dy }, cardW, cardH))
-  }, [])
+    const d = dragRef.current;
+    if (!d) return;
+    const dx = e.clientX - d.startX;
+    const dy = e.clientY - d.startY;
+    if (!d.moved && Math.hypot(dx, dy) < 6) return;
+    d.moved = true;
+    const card = (e.currentTarget as HTMLElement).parentElement as HTMLElement | null;
+    const cardW = card?.offsetWidth ?? (collapsed ? COLLAPSED_W : EXPANDED_W);
+    const cardH = card?.offsetHeight ?? DEFAULT_H;
+    setPos(clampPos({ x: d.origX + dx, y: d.origY + dy }, cardW, cardH));
+  }, [collapsed]);
 
   const onGripPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    dragRef.current = null
+    dragRef.current = null;
     try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId) } catch { /* ignore */ }
-    // Single click is reserved for drag-start; the toggle uses double
-    // click so accidental taps don't collapse the player.
-  }, [])
+  }, []);
 
-  // Double-click on the grip toggles the collapsed state.
   const onGripDoubleClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    e.preventDefault()
-    e.stopPropagation()
-    setCollapsed(c => !c)
-  }, [])
+    e.preventDefault();
+    e.stopPropagation();
+    setCollapsed(c => !c);
+  }, []);
 
-  // prev/next cycle through the SomaFM stream list. Declared here
-  // (before the early-return below) so the hook order stays the
-  // same whether or not a stream is currently playing. If we
-  // declared them after `if (!audio.current) return null`, the
-  // first render of MiniPlayer (no stream) would skip them and
-  // the second render (stream loaded) would add them — that's
-  // a hooks-order violation and React throws #310.
+  // ponytail: hooks must be declared unconditionally (no early returns before
+  // them). Even when there's no current stream, prev/next should still be
+  // callable (they fall back to the streams list).
   const goNext = useCallback(() => {
-    const list = STREAMS
-    if (list.length === 0) return
-    const idx = Math.max(0, list.findIndex(s => s.mount === audio.current?.mount))
-    const next = list[(idx + 1) % list.length]
-    audio.play(next)
-  }, [audio])
+    if (streams.length === 0) return;
+    const idx = Math.max(0, streams.findIndex(s => s.mount === state.current?.mount));
+    const next = streams[(idx + 1) % streams.length];
+    engine.play(next);
+  }, [engine, streams, state.current?.mount]);
   const goPrev = useCallback(() => {
-    const list = STREAMS
-    if (list.length === 0) return
-    const idx = list.findIndex(s => s.mount === audio.current?.mount)
-    const prev = list[(idx <= 0 ? list.length : idx) - 1]
-    audio.play(prev)
-  }, [audio])
+    if (streams.length === 0) return;
+    const idx = streams.findIndex(s => s.mount === state.current?.mount);
+    const prev = streams[(idx <= 0 ? streams.length : idx) - 1];
+    engine.play(prev);
+  }, [engine, streams, state.current?.mount]);
 
-  if (!audio.current) return null
+  if (!state.current) return null;
 
-  // Desktop: by default the player is pinned to the bottom edge
-  // (like mobile). The user can press the detach button to lift
-  // it into a draggable floating card. Mobile is always pinned.
-  const isPinned = !isDesktop || !floating
+  const isPinned = !isDesktop || !floating;
 
   const positionStyle: React.CSSProperties = !isPinned
-    ? { left: pos.x, top: pos.y, right: 'auto', bottom: 'auto' }
-    : {}
+    ? { left: pos.x, top: pos.y, right: "auto", bottom: "auto" }
+    : {};
 
   return (
     <div
       className={
         isPinned
-          ? 'fixed bottom-0 left-0 right-0 z-50 animate-slide-in-from-bottom'
-          : 'fixed z-50 transition-[width] duration-200 ease-out animate-scale-in'
+          ? "fixed bottom-0 left-0 right-0 z-50 animate-slide-in-from-bottom"
+          : "fixed z-50 transition-[width] duration-200 ease-out animate-scale-in"
       }
       style={{
         ...positionStyle,
@@ -164,11 +192,10 @@ export default function MiniPlayer() {
       <div
         className={
           isPinned
-            ? 'bg-slate-900/95 backdrop-blur border-t border-slate-700 shadow-2xl overflow-hidden flex'
-            : 'bg-slate-900/95 backdrop-blur border border-slate-700 rounded-2xl shadow-2xl overflow-hidden flex'
+            ? "bg-slate-900/95 backdrop-blur border-t border-slate-700 shadow-2xl overflow-hidden flex"
+            : "bg-slate-900/95 backdrop-blur border border-slate-700 rounded-2xl shadow-2xl overflow-hidden flex"
         }
       >
-        {/* Drag handle (only when floating). Double-click toggles collapse. */}
         {!isPinned && (
           <div
             onPointerDown={onGripPointerDown}
@@ -189,30 +216,28 @@ export default function MiniPlayer() {
           </div>
         )}
 
-        {/* Body */}
         <div
           className={
             isPinned
-              ? 'flex items-center gap-1.5 px-2 py-2 min-w-0 flex-1'
-              : `flex items-center gap-2 ${collapsed ? 'pr-4' : ''} px-3 py-2 min-w-0 flex-1`
+              ? "flex items-center gap-1.5 px-2 py-2 min-w-0 flex-1"
+              : `flex items-center gap-2 ${collapsed ? "pr-4" : ""} px-3 py-2 min-w-0 flex-1`
           }
         >
-          {/* Pinned (mobile OR desktop-without-floating): chip + spectrum + prev/play/next, with optional detach. */}
           {isPinned && (
             <>
               <div className="flex-1 min-w-0 flex items-center gap-2">
-                <span className={`text-base leading-none flex-shrink-0 ${audio.current.accent || 'text-indigo-400'}`}>
-                  {audio.current.emoji || '♪'}
+                <span className={`text-base leading-none flex-shrink-0 ${state.current.accent || "text-indigo-400"}`}>
+                  {state.current.emoji || "\u266A"}
                 </span>
                 <div className="min-w-0 flex flex-col leading-tight flex-1">
                   <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 truncate">
-                    {audio.current.category || audio.current.name}
+                    {state.current.category || state.current.name}
                   </span>
                   <MarqueeLink
                     to="/icecast"
-                    text={audio.track
-                      ? [audio.track.artist, audio.track.title].filter(Boolean).join(' — ') || audio.current.name
-                      : (audio.current.artist || audio.current.title || audio.current.name)}
+                    text={state.track
+                      ? [state.track.artist, state.track.title].filter(Boolean).join(" \u2014 ") || state.current.name
+                      : (state.current.artist || state.current.title || state.current.name)}
                     className="text-sm font-medium text-slate-100"
                   />
                 </div>
@@ -225,12 +250,12 @@ export default function MiniPlayer() {
               />
 
               <button
-                onClick={audio.toggleMute}
+                onClick={engine.toggleMute}
                 className="w-8 h-8 rounded-lg text-slate-300 hover:text-slate-100 hover:bg-slate-800 flex items-center justify-center flex-shrink-0 transition-colors"
-                aria-label={audio.muted ? 'Activar sonido' : 'Silenciar'}
-                title={audio.muted ? 'Activar sonido' : 'Silenciar'}
+                aria-label={state.muted ? "Activar sonido" : "Silenciar"}
+                title={state.muted ? "Activar sonido" : "Silenciar"}
               >
-                {audio.muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+                {state.muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
               </button>
 
               <input
@@ -238,8 +263,8 @@ export default function MiniPlayer() {
                 min={0}
                 max={1}
                 step={0.05}
-                value={audio.muted ? 0 : audio.volume}
-                onChange={(e) => audio.setVolume(Number(e.target.value))}
+                value={state.muted ? 0 : state.volume}
+                onChange={(e) => engine.setVolume(Number(e.target.value))}
                 className="w-16 sm:w-14 md:w-20 accent-indigo-500 flex-shrink-0"
                 aria-label="Volumen"
               />
@@ -254,13 +279,13 @@ export default function MiniPlayer() {
               </button>
 
               <button
-                onClick={audio.toggle}
+                onClick={engine.toggle}
                 className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-violet-500 hover:from-indigo-400 hover:to-violet-400 text-white flex items-center justify-center flex-shrink-0 transition-all hover:scale-105 active:scale-95 shadow-md hover:shadow-lg select-none"
-                aria-label={audio.playing ? 'Pausar' : 'Reproducir'}
+                aria-label={state.playing ? "Pausar" : "Reproducir"}
               >
-                {audio.loading ? (
+                {state.loading ? (
                   <span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                ) : audio.playing ? (
+                ) : state.playing ? (
                   <Pause className="w-4 h-4" />
                 ) : (
                   <Play className="w-4 h-4 translate-x-[1px]" />
@@ -289,16 +314,15 @@ export default function MiniPlayer() {
             </>
           )}
 
-          {/* Floating (desktop-only, when detach is on): spectrum + play + extras, draggable. */}
           {!isPinned && (
             <>
               {!collapsed && (
                 <div className="flex items-center gap-1.5 flex-shrink-0">
-                  <span className={`text-base leading-none ${audio.current.accent || 'text-indigo-400'}`}>
-                    {audio.current.emoji || '♪'}
+                  <span className={`text-base leading-none ${state.current.accent || "text-indigo-400"}`}>
+                    {state.current.emoji || "\u266A"}
                   </span>
                   <span className="text-xs font-semibold text-slate-300 truncate max-w-[6rem]">
-                    {audio.current.category || audio.current.name}
+                    {state.current.category || state.current.name}
                   </span>
                 </div>
               )}
@@ -306,9 +330,9 @@ export default function MiniPlayer() {
               {!collapsed && (
                 <MarqueeLink
                   to="/icecast"
-                  text={audio.track
-                    ? [audio.track.artist, audio.track.title].filter(Boolean).join(' — ') || audio.current.name
-                    : (audio.current.artist || audio.current.title || audio.current.name)}
+                  text={state.track
+                    ? [state.track.artist, state.track.title].filter(Boolean).join(" \u2014 ") || state.current.name
+                    : (state.current.artist || state.current.title || state.current.name)}
                   className="text-sm font-medium text-slate-100 max-w-[9rem]"
                 />
               )}
@@ -320,13 +344,13 @@ export default function MiniPlayer() {
               />
 
               <button
-                onClick={audio.toggle}
+                onClick={engine.toggle}
                 className="w-9 h-9 rounded-full bg-gradient-to-br from-indigo-500 to-violet-500 hover:from-indigo-400 hover:to-violet-400 text-white flex items-center justify-center flex-shrink-0 transition-all hover:scale-105 active:scale-95 shadow-md select-none"
-                aria-label={audio.playing ? 'Pausar' : 'Reproducir'}
+                aria-label={state.playing ? "Pausar" : "Reproducir"}
               >
-                {audio.loading ? (
+                {state.loading ? (
                   <span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                ) : audio.playing ? (
+                ) : state.playing ? (
                   <Pause className="w-4 h-4" />
                 ) : (
                   <Play className="w-4 h-4 translate-x-[1px]" />
@@ -336,15 +360,15 @@ export default function MiniPlayer() {
               {!collapsed && (
                 <>
                   <div className="flex items-center gap-1.5 flex-shrink-0">
-                    <span className={`w-2 h-2 rounded-full ${audio.playing ? 'bg-emerald-400' : 'bg-slate-500'} ${audio.playing ? 'animate-pulse' : ''}`} />
+                    <span className={`w-2 h-2 rounded-full ${state.playing ? "bg-emerald-400" : "bg-slate-500"} ${state.playing ? "animate-pulse" : ""}`} />
                   </div>
 
                   <button
-                    onClick={audio.toggleMute}
+                    onClick={engine.toggleMute}
                     className="w-8 h-8 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 flex items-center justify-center flex-shrink-0 transition-colors hidden sm:flex"
-                    aria-label={audio.muted ? 'Activar sonido' : 'Silenciar'}
+                    aria-label={state.muted ? "Activar sonido" : "Silenciar"}
                   >
-                    {audio.muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+                    {state.muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
                   </button>
 
                   <input
@@ -352,8 +376,8 @@ export default function MiniPlayer() {
                     min={0}
                     max={1}
                     step={0.05}
-                    value={audio.muted ? 0 : audio.volume}
-                    onChange={(e) => audio.setVolume(Number(e.target.value))}
+                    value={state.muted ? 0 : state.volume}
+                    onChange={(e) => engine.setVolume(Number(e.target.value))}
                     className="w-12 sm:w-16 hidden sm:block accent-indigo-500"
                     aria-label="Volumen"
                   />
@@ -368,7 +392,7 @@ export default function MiniPlayer() {
                   </button>
 
                   <button
-                    onClick={audio.stop}
+                    onClick={engine.stop}
                     className="w-7 h-7 rounded-lg text-slate-500 hover:text-slate-100 hover:bg-slate-800 flex items-center justify-center flex-shrink-0 transition-colors"
                     aria-label="Detener"
                   >
@@ -381,5 +405,5 @@ export default function MiniPlayer() {
         </div>
       </div>
     </div>
-  )
+  );
 }
