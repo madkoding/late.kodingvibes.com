@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render } from '@testing-library/react'
 import SiteHeader from './SiteHeader'
+import { APP_VERSION } from '../lib/version'
 
 vi.mock('react-router-dom', () => ({
   Link: ({ children, to, className }: any) => <a href={to} className={className}>{children}</a>,
@@ -16,7 +17,7 @@ describe('SiteHeader', () => {
 
   it('renders version pill', () => {
     const { container } = render(<SiteHeader />)
-    expect(container.textContent).toContain('v1.23.0')
+    expect(container.textContent).toContain(APP_VERSION)
   })
 
   it('renders nav links', () => {

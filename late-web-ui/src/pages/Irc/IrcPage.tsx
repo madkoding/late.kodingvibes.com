@@ -318,7 +318,7 @@ export function Irc() {
           const ch = channelsRef.current.get(data.channel_id)
           const chName = ch?.name ? ch.name.replace(/^#/, '') : null
           const where = chName ? ` en #${chName}` : ''
-          pushToast(`🔔 ${data.from_display_name} te está zumbando${where}`, 'mention', { autoCloseMs: 15000 })
+          pushToast(`🔔 ${data.from_display_name} te está zumbando${where}`, 'mention', { autoCloseMs: 60000 })
         }
       })
       client.onMemberMuted((data) => {

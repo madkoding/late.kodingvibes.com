@@ -58,6 +58,7 @@ function ensureSharedAudio(volume: number, muted: boolean): HTMLAudioElement {
   if (sharedAudio) return sharedAudio
   const a = new Audio()
   a.preload = 'none'
+  a.crossOrigin = 'anonymous'
   a.volume = muted ? 0 : volume
   sharedAudio = a
   return a
@@ -68,6 +69,12 @@ function ensureAnalyser(): AnalyserNode | null {
   if (!sharedAudio) return null
   const Ctor = window.AudioContext || (window as any).webkitAudioContext
   if (!sharedCtx) sharedCtx = new Ctor()
+  // ponytail: Safari starts the context in 'suspended'. resume() must
+  // happen before createMediaElementSource, otherwise the graph wires
+  // up but the AnalyserNode receives zero samples. Call resume()
+  // synchronously; the state transition completes on the next tick
+  // and any audio.play() in the same gesture gets unblocked.
+  sharedCtx.resume().catch(() => {})
   try {
     const source = sharedCtx.createMediaElementSource(sharedAudio)
     const analyser = sharedCtx.createAnalyser()
@@ -115,12 +122,19 @@ export function AudioProvider({ children }: { children: ReactNode }) {
     setCurrent(c)
     setLoading(true)
     let done = false
-    const tryPlay = () => {
+    const tryPlay = (inGesture: boolean) => {
       if (done) return
       const a = ensureSharedAudio(volume, muted)
       if (a.src !== c.url) a.src = c.url
-      if (sharedCtx) sharedCtx.resume().catch(() => {})
-      else ensureAnalyser()
+      if (sharedCtx) {
+        sharedCtx.resume().catch(() => {})
+      } else if (inGesture) {
+        // ponytail: Safari permanently marks an AudioContext created
+        // outside a user gesture as 'suspended' and never delivers
+        // samples to its AnalyserNode. Defer context creation until
+        // the first click so the graph wires up in 'running' state.
+        ensureAnalyser()
+      }
       const p = a.play()
       if (p && typeof p.then === 'function') {
         p.then(() => { done = true; cleanup() })
@@ -130,9 +144,7 @@ export function AudioProvider({ children }: { children: ReactNode }) {
         cleanup()
       }
     }
-    const onGesture = () => {
-      tryPlay()
-    }
+    const onGesture = () => { tryPlay(true) }
     const cleanup = () => {
       document.removeEventListener('pointerdown', onGesture, true)
       document.removeEventListener('keydown', onGesture, true)
@@ -141,7 +153,7 @@ export function AudioProvider({ children }: { children: ReactNode }) {
     document.addEventListener('pointerdown', onGesture, true)
     document.addEventListener('keydown', onGesture, true)
     document.addEventListener('touchstart', onGesture, true)
-    tryPlay()
+    tryPlay(false)
     return cleanup
   }, [muted, volume])
 

@@ -51,6 +51,24 @@ describe('chat-notifs', () => {
       const result = formatToast(msg as any, 1, 'bob')
       expect(result).toBeNull()
     })
+
+    it('includes channel name in mention toast when provided', () => {
+      const result = formatToast(baseMsg as any, 1, 'bob', '#general')
+      expect(result).not.toBeNull()
+      expect(result!.text).toContain('en #general')
+      expect(result!.channelName).toBe('general')
+    })
+
+    it('includes channel name in mass-mention toast', () => {
+      const msg = { ...baseMsg, content: '@here everyone', mentioned_user_ids: [1], is_mass_mention: true }
+      const result = formatToast(msg as any, 1, 'bob', '#sala')
+      expect(result!.text).toContain('en #sala')
+    })
+
+    it('omits channel suffix when channelName is not provided', () => {
+      const result = formatToast(baseMsg as any, null, 'bob')
+      expect(result!.text).not.toContain(' en #')
+    })
   })
 
   describe('showSystemNotification', () => {

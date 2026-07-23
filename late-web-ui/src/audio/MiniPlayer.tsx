@@ -20,7 +20,11 @@ export default function MiniPlayer() {
     typeof window !== 'undefined' && window.innerWidth >= 640,
   )
 
-  const analyserRef = useRef<AnalyserNode | null>(null)
+  // ponytail: state (not ref) so the SpectrumCanvas re-renders when
+  // the analyser becomes available. A ref would update .current
+  // without triggering a render and the canvas would be stuck
+  // with analyser={null} forever.
+  const [analyser, setAnalyser] = useState<AnalyserNode | null>(null)
 
   // Persist
   useEffect(() => { savePos(pos) }, [pos])
@@ -43,9 +47,9 @@ export default function MiniPlayer() {
     const tryAttach = () => {
       if (cancelled) return true
       const el = audio.getAudioElement()
-      const analyser = audio.getAnalyser()
-      if (!el || !analyser) return false
-      analyserRef.current = analyser
+      const a = audio.getAnalyser()
+      if (!el || !a) return false
+      setAnalyser(a)
       return true
     }
     if (!tryAttach()) {
@@ -215,7 +219,7 @@ export default function MiniPlayer() {
               </div>
 
               <SpectrumCanvas
-                analyser={analyserRef.current}
+                analyser={analyser}
                 className="hidden sm:block flex-shrink-0 h-6 w-32 md:w-40"
                 style={{ minWidth: 0 }}
               />
@@ -310,7 +314,7 @@ export default function MiniPlayer() {
               )}
 
               <SpectrumCanvas
-                analyser={analyserRef.current}
+                analyser={analyser}
                 className="hidden sm:block flex-1 h-6 sm:h-7 min-w-0"
                 style={{ minWidth: collapsed ? 48 : 0 }}
               />
