@@ -84,9 +84,9 @@ late.kodingvibes.com/                (this repo, the shell)
 - **Source:** `late-web-ui/src/` — currently: header, nav, `Home.tsx`, `MiniPlayer.tsx` (consume `window.RadioEngine`).
 - **Routes:** `/` (Home), `/icecast` (renders `<div id="micro-radio-root" />`), `/irc` (renders `<div id="micro-chat-root" />`).
 - **Served by:** nginx directly from `/var/www/html/`. `vite-spa.service` is **inactive** in production.
-- **CRITICAL — build + copy after EVERY frontend change:** see **Deploy checklist** below.
+- **CRITICAL — build after EVERY frontend change:** see **Deploy checklist** below. Do not copy to `/var/www/html/` manually; the server-side auto-deploy handles that.
 - **Typecheck only (faster sanity check before build):** `cd late-web-ui && npm run lint`
-- **Versioning:** bump `APP_VERSION` in `late-web-ui/src/lib/version.ts` for EVERY change (feature or fix). It renders as a pill next to the site name in the header, so a hard-reload after deploy tells you at a glance whether the new bundle is live. Current: **v1.34.0**.
+- **Versioning:** bump `APP_VERSION` in `late-web-ui/src/lib/version.ts` for EVERY change (feature or fix). It renders as a pill next to the site name in the header, so a hard-reload after deploy tells you at a glance whether the new bundle is live. Current: **v1.36.0**.
 - **Dependencies:** `react`, `react-dom`, `react-router-dom`, `lucide-react`. The shell does NOT need `marked`, `dompurify`, `zustand`, `msw` — those live in the micros now.
 
 ### 2. late-micro-radio (`/root/late-micro-radio`, separate repo)
@@ -101,7 +101,7 @@ late.kodingvibes.com/                (this repo, the shell)
   1. Bump `version` in `/root/late-micro-radio/package.json`.
   2. Update `MICRO_RADIO_VERSION` constant in `late-web-ui/vite.config.ts` (the microfrontsPlugin).
   3. `bash scripts/build-micro-radio.sh` — bundle goes to `/var/www/html/micro/radio/vX.Y.Z/`.
-  4. `cd late-web-ui && npm run build && cp -r dist/. /var/www/html/ && nginx -s reload` — shell re-emits the new `<script src>`.
+  4. `cd late-web-ui && npm run build` — shell re-emits the new `<script src>`.
 
 ### 3. late-micro-chat (`/root/late-micro-chat`, separate repo)
 - **Stack:** Vite + React 18 + Tailwind 4, lib ESM.
@@ -118,18 +118,24 @@ late.kodingvibes.com/                (this repo, the shell)
 
 ## Versioning (microfronts)
 - Each micro has its own `version` field in `package.json`.
-- The shell hardcodes the path (`/micro/radio/v1.27.0/entry.js`) in `vite.config.ts` (`MICRO_RADIO_VERSION` / `MICRO_CHAT_VERSION`).
-- Bump shell's `MICRO_RADIO_VERSION` constant + redeploy shell to pick up a new micro build. This is intentional — see Phase 5 plan in AGENTS.md-history for the `latest.json` dynamic upgrade option (deferred).
+- The build scripts create versioned directories plus a `latest` symlink and a `latest.json` marker (`/micro/radio/latest.json`, `/micro/chat/latest.json`). The shell uses `/micro/{radio,chat}/latest/entry.js` with a stable URL so the browser re-validates the symlink target on every deploy (nginx ETag), and `UpdateNotice` can detect upgrades while the user is already on the page without a full shell redeploy.
+
+### Update notice and content-cache cleanup
+- The shell's `UpdateNotice` polls `/version.json`, `/micro/radio/latest.json`, and `/micro/chat/latest.json` every 30 s.
+- When a newer version is detected, it shows a toast; after a short grace period, or immediately when the user clicks **Actualizar**, it calls `applyUpdate()`:
+  1. Deletes every entry in the browser's `CacheStorage` (application caches), **only** for late assets — never touches `localStorage` auth tokens or other site data.
+  2. Removes `late.seen` (the UpdateNotice own version marker).
+  3. Calls `location.reload()` so the browser fetches the latest `index.html`, `vendor/vendor.js`, `entry.js`, and CSS with no stale cached bundles.
+- The auto-deploy on the server is now responsible for swapping the `latest` symlink and updating `latest.json`; the front only needs to clear its own content caches and reload.
 
 ## Deploy checklist (mandatory after EVERY change, no exceptions)
 1. Bump the relevant version: `APP_VERSION` (shell) or `version` (micro package.json).
-2. If micro changed: update `MICRO_*_VERSION` in `late-web-ui/vite.config.ts`.
-3. `bash scripts/extract-vendor.sh` if React/ReactDOM versions bumped (uncommon).
-4. `bash scripts/build-micro-{radio,chat}.sh` for each micro that changed.
-5. `cd late-web-ui && npm run build && rm -rf /var/www/html/assets /var/www/html/index.html && cp -r dist/. /var/www/html/ && nginx -s reload`
-6. If chat-bridge changed: `bash /root/restart-chat-bridge.sh`
-7. If Icecast config changed: `docker restart icecast`
-8. If relay scripts changed: `bash scripts/start_soma_relays.sh` and/or restart metadata relay
+2. `bash scripts/extract-vendor.sh` if React/ReactDOM versions bumped (uncommon).
+3. `bash scripts/build-micro-{radio,chat}.sh` for each micro that changed.
+4. `cd late-web-ui && npm run build`
+5. If chat-bridge changed: `bash /root/restart-chat-bridge.sh`
+6. If Icecast config changed: `docker restart icecast`
+7. If relay scripts changed: `bash scripts/start_soma_relays.sh` and/or restart metadata relay
 
 ## Commands (run from repo root)
 ## Auto-deploy (late-deployd)
@@ -151,9 +157,10 @@ Logs: `/var/log/late-deployd/`.
 Deploys are asynchronous (returns HTTP 202) so GitHub does not retry while a build runs. A per-repo lock prevents concurrent deploys of the same repo.
 
 ## Commands (run from repo root)
-- **Manual deploy shell (fallback):** `cd late-web-ui && npm run build && rm -rf /var/www/html/assets /var/www/html/index.html && cp -r dist/. /var/www/html/ && nginx -s reload`
 - **Manual deploy radio (fallback):** `bash scripts/build-micro-radio.sh`
 - **Manual deploy chat (fallback):** `bash scripts/build-micro-chat.sh`
+- **Manual deploy shell (fallback):** `cd late-web-ui && npm run build && rm -rf /var/www/html/assets /var/www/html/index.html && cp -r dist/. /var/www/html/ && nginx -s reload`
+  - Only use this if the server-side auto-deploy is broken. Normally `npm run build` is enough because the deploy webhook copies the bundle.
 - **Rebuild vendor:** `bash scripts/extract-vendor.sh`
 - **Typecheck shell:** `cd late-web-ui && npm run lint`
 - **Restart deployd:** `systemctl restart late-deployd`
@@ -183,4 +190,4 @@ Deploys are asynchronous (returns HTTP 202) so GitHub does not retry while a bui
 - **Fase 2 (DONE, v1.32.0):** moved the real Icecast UI (`pages/Icecast/`, `streams.ts`, `RadioEngine.ts`, persistence, etc.) into `late-micro-radio` (v0.1.0). The shell's `pages/Icecast.tsx` is now a 5-line slot. Added `setTrack` to `RadioEngine` for mid-play metadata updates.
 - **Fase 3 (DONE, v1.33.0):** moved the chat (`pages/Irc/`, `components/irc/*`, voice chain, `lib/chat`, `lib/irc`, `lib/{chat-notifs,emoji,image-prep,notification-sound}.ts`) into `late-micro-chat` (v0.1.0). The chat consumes `window.RadioEngine.getAnalyser()` for voice-room visualizers. Replaced the legacy `useAudio()` hook with a direct `window.RadioEngine` shim inside the IrcPage.
 - **Fase 4 (DONE, v1.34.0):** cleaned the shell — `package.json` loses `marked`, `dompurify`, `msw`, `zustand`. Dropped `lib/chat`, `lib/irc`, `voice/`, `components/irc/`, `audio/{AudioProvider,TrackMetadataSync,persistence,presets,voiceChain,audio-engine}.ts`, `hooks/useAudioLevel.ts`. Removed the dev proxy for `/status-json.xsl` (now consumed by the micro). Removed `index.html` import map (micros externalize React via Vite, share the `/vendor/vendor.js`).
-- **Fase 5 (DEFERRED):** `latest.json` to enable dynamic micro upgrades without shell redeploy.
+- **Fase 5 (DONE, v1.35.0):** `latest.json` + stable `/micro/{radio,chat}/latest/` URLs enable dynamic micro upgrades without shell redeploy. The front's `UpdateNotice` polls the three version markers and clears content caches before reloading.

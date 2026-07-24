@@ -32,6 +32,40 @@ function writeSeen(seen: Record<Source, string>) {
   try { localStorage.setItem('late.seen', JSON.stringify(seen)) } catch { /* ignore */ }
 }
 
+function clearContentCache(): Promise<void> {
+  return new Promise((resolve) => {
+    // Never touch auth tokens — only remove content caches (Cache API + our
+    // own version marker) so the next load fetches the newest shell/MF files.
+    const dropSeen = () => {
+      try { localStorage.removeItem('late.seen') } catch { /* ignore */ }
+    }
+
+    const cachesApi = (typeof window !== 'undefined' && 'caches' in window)
+      ? (window as unknown as { caches: CacheStorage }).caches
+      : undefined
+
+    if (!cachesApi?.keys) {
+      dropSeen()
+      resolve()
+      return
+    }
+
+    cachesApi.keys().then((names) => {
+      return Promise.all(names.map((name) => cachesApi.delete(name)))
+    }).catch(() => {
+      // ignore — some private modes block CacheStorage
+    }).finally(() => {
+      dropSeen()
+      resolve()
+    })
+  })
+}
+
+async function applyUpdate() {
+  await clearContentCache()
+  location.reload()
+}
+
 async function fetchManifest(url: string): Promise<string | null> {
   try {
     const res = await fetch(url, { cache: 'no-store' })
@@ -63,7 +97,7 @@ export function UpdateNotice() {
         return
       }
       timer = window.setTimeout(() => {
-        if (!cancelled && !isUserBusy()) location.reload()
+        if (!cancelled && !isUserBusy()) applyUpdate()
       }, AUTO_RELOAD_MS)
     }
     arm()
@@ -150,7 +184,7 @@ export function UpdateNotice() {
       <span className="hidden sm:inline">{label}</span>
       <span className="sm:hidden">Actualización</span>
       <button
-        onClick={() => location.reload()}
+        onClick={() => applyUpdate()}
         className="bg-white text-indigo-700 px-2.5 py-1 rounded-full font-bold hover:bg-indigo-50"
       >
         Actualizar
