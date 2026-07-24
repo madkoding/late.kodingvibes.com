@@ -50,17 +50,17 @@ late.kodingvibes.com/                (this repo, the shell)
 - Config: `infra/icecast/icecast.xml` (bind-mounted in Docker)
 
 ### Chat-bridge (REST + WebSocket on :9100)
-- **Docker image:** `chat-bridge:dev`, source at `services/chat-bridge/app.py`
+- **Runtime:** host-native systemd service (`chat-bridge.service`), source at `services/chat-bridge/app.py`
 - **Run command (preserves DB and restart policy):**
   ```bash
-  bash /root/restart-chat-bridge.sh
+  bash /root/late.kodingvibes.com/scripts/restart-chat-bridge.sh
   ```
   The env vars (SSO_BRIDGE_SECRET, SQLITE_PATH, ATTACHMENT_DIR) are persisted in `/root/.env.backup` — never generate a new random secret or the JWT validation breaks.
-- **Restart script:** `/root/restart-chat-bridge.sh` — rebuilds image, reads env from `/root/.env.backup`, starts container.
-- **Build image:** `docker build -t chat-bridge:dev services/chat-bridge/`
-- SQLite lives at `/data/chat-bridge/chat.db` (bind mount so it survives container restarts).
+- **Restart script:** `scripts/restart-chat-bridge.sh` — updates the venv, restarts the systemd service, and waits until `/api/chat/unfurl` is healthy.
+- **Service file:** `services/chat-bridge/chat-bridge.service` (install to `/etc/systemd/system/` and `systemctl enable --now chat-bridge`).
+- SQLite lives at `/data/chat-bridge/chat.db` (`/data/chat-bridge/` is created by the restart script).
 - **JWT shape it accepts:** HS256, `aud: "late.kodingvibes.com"`, `iss: "kodingvibes.com"`, signed with `SSO_BRIDGE_SECRET`.
-- **CRITICAL:** `SSO_BRIDGE_SECRET` MUST match the one in Vercel (kodingvibes project, prod env). If they drift, every exchange returns 401 and the front enters a redirect loop. To rotate: pick a new value, `vercel env rm SSO_BRIDGE_SECRET production --yes && vercel env add SSO_BRIDGE_SECRET production` in the kodingvibes repo, `vercel deploy --prod`, then update `/root/.env.backup` and restart the container.
+- **CRITICAL:** `SSO_BRIDGE_SECRET` MUST match the one in Vercel (kodingvibes project, prod env). If they drift, every exchange returns 401 and the front enters a redirect loop. To rotate: pick a new value, `vercel env rm SSO_BRIDGE_SECRET production --yes && vercel env add SSO_BRIDGE_SECRET production` in the kodingvibes repo, `vercel deploy --prod`, then update `/root/.env.backup` and restart the service.
 - **Role system** (see `core/db.py` migrations + `core/auth.py::is_global_admin`):
   - `users.global_role` (column added on startup migration): `'super_admin'` | `'admin'` | `'user'` (default). Affects the whole platform, not a single channel.
   - `channel_members.role` (per-channel): `'admin'` | `'mod'` | `NULL`. Unchanged. Moderator (mod) still only works inside the channel where it's set.
@@ -157,7 +157,7 @@ Pushing to `main` on the managed repos triggers an automatic deploy on this host
 
 | Repo | Local path | Deploy action |
 |------|------------|---------------|
-| `kodingvibes/late.kodingvibes.com` | `/root/late.kodingvibes.com` | `git pull` → `extract-vendor.sh` → build shell → copy to `/var/www/html/` → restart chat-bridge Docker if `services/chat-bridge/` changed → `nginx -s reload`. |
+| `kodingvibes/late.kodingvibes.com` | `/root/late.kodingvibes.com` | `git pull` → `extract-vendor.sh` → build shell → copy to `/var/www/html/` → **restart chat-bridge service** and wait for `/api/chat/unfurl` health → `nginx -s reload`. |
 | `kodingvibes/late-micro-radio` | `/root/late-micro-radio` | `git pull` → `scripts/build-micro-radio.sh` → `extract-vendor.sh` → **rebuild shell** → copy to `/var/www/html/` → `nginx -s reload`. |
 | `kodingvibes/late-micro-chat` | `/root/late-micro-chat` | `git pull` → `scripts/build-micro-chat.sh` → `extract-vendor.sh` → **rebuild shell** → copy to `/var/www/html/` → `nginx -s reload`. |
 
@@ -176,8 +176,8 @@ Deploys are asynchronous (returns HTTP 202) so GitHub does not retry while a bui
   - Only use this if the server-side auto-deploy is broken. Normally `npm run build` is enough because the deploy webhook copies the bundle.
 - **Rebuild vendor:** `bash scripts/extract-vendor.sh`
 - **Typecheck shell:** `cd late-web-ui && npm run lint`
+- **Restart chat-bridge:** `bash scripts/restart-chat-bridge.sh`
 - **Restart deployd:** `systemctl restart late-deployd`
-- **View deployd logs:** `journalctl -u late-deployd -f`
 - **Restart icecast:** `docker restart icecast`
 - **Restart ffmpeg relays:** `bash scripts/start_soma_relays.sh`
 - **Restart metadata relay:** `pkill -f soma_metadata_relay; python3 scripts/soma_metadata_relay.py > /tmp/soma_metadata_relay.log 2>&1 &`

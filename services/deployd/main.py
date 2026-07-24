@@ -193,14 +193,40 @@ def reload_nginx(log: list[str]) -> int:
     return rc
 
 
+CHAT_BRIDGE_RESTART_SCRIPT = os.environ.get(
+    "CHAT_BRIDGE_RESTART_SCRIPT",
+    "/root/late.kodingvibes.com/scripts/restart-chat-bridge.sh",
+)
+
+
 def restart_chat_bridge(log: list[str]) -> int:
-    log.append(f"[{now_iso()}] chat-bridge changed; restarting container")
-    rc, out, err = run(["bash", "/root/restart-chat-bridge.sh"])
+    log.append(f"[{now_iso()}] restarting chat-bridge service")
+    rc, out, err = run(["bash", CHAT_BRIDGE_RESTART_SCRIPT])
     log.append(out.rstrip())
     if err:
         log.append(f"stderr: {err.rstrip()}")
     if rc != 0:
         log.append(f"chat-bridge restart failed: {rc}")
+    return rc
+
+
+def healthcheck_chat_bridge(log: list[str]) -> int:
+    """Verify the unfurl endpoint (and therefore the whole app) is reachable."""
+    log.append(f"[{now_iso()}] healthchecking chat-bridge /api/chat/unfurl")
+    rc, out, err = run(
+        [
+            "bash",
+            "-c",
+            "for i in {1..30}; do "
+            "  curl -fsS http://127.0.0.1:9100/api/chat/unfurl?url=https://example.com >/dev/null && exit 0; "
+            "  sleep 1; "
+            "done; exit 1",
+        ]
+    )
+    if rc != 0:
+        log.append(f"chat-bridge healthcheck failed: {err.rstrip()}")
+    else:
+        log.append("chat-bridge healthcheck passed")
     return rc
 
 
@@ -212,11 +238,12 @@ def deploy_shell_and_backend(repo_path: str, log: list[str]) -> int:
     if copy_shell_to_www(log) != 0:
         return 1
 
-    if chat_bridge_changed(repo_path):
-        if restart_chat_bridge(log) != 0:
-            return 1
-    else:
-        log.append(f"[{now_iso()}] chat-bridge not changed; skipping container restart")
+    # Always restart chat-bridge on shell deploys: even if only the router code
+    # changed (e.g. a new endpoint), the running process must pick it up.
+    if restart_chat_bridge(log) != 0:
+        return 1
+    if healthcheck_chat_bridge(log) != 0:
+        return 1
 
     if reload_nginx(log) != 0:
         return 1
