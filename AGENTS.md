@@ -35,6 +35,7 @@ late.kodingvibes.com/                (this repo, the shell)
 | nginx (host) | 80/443 | Static files + proxies streams → Icecast `:8000`, chat-bridge `:9100` |
 | Vite (systemd, inactive) | 5173 | Dev server (inactive in prod; prod serves `/var/www/html/` static) |
 | chat-bridge (Docker) | 9100 | REST + WebSocket. JWT verified via `SSO_BRIDGE_SECRET` (must match Vercel prod env). |
+| late-deployd (systemd) | 9200 | GitHub webhook receiver. Exposed at `https://late.kodingvibes.com/deploy-webhook`. Auto-pulls + deploys on push to `main` for the managed repos. |
 | late-micro-radio | (CDN) | Bundle ESM en `/micro/radio/vX.Y.Z/entry.js`. Posee `<audio>`, `AudioContext`, `AnalyserNode`. |
 | late-micro-chat | (CDN) | Bundle ESM en `/micro/chat/vX.Y.Z/entry.js`. Posee voice rooms + WebSocket. |
 
@@ -131,11 +132,32 @@ late.kodingvibes.com/                (this repo, the shell)
 8. If relay scripts changed: `bash scripts/start_soma_relays.sh` and/or restart metadata relay
 
 ## Commands (run from repo root)
-- **Build & deploy shell:** `cd late-web-ui && npm run build && rm -rf /var/www/html/assets /var/www/html/index.html && cp -r dist/. /var/www/html/ && nginx -s reload`
-- **Build & deploy radio:** `bash scripts/build-micro-radio.sh`
-- **Build & deploy chat:** `bash scripts/build-micro-chat.sh`
+## Auto-deploy (late-deployd)
+
+Pushing to `main` on the managed repos triggers an automatic deploy on this host:
+
+| Repo | Local path | Deploy action |
+|------|------------|---------------|
+| `kodingvibes/late.kodingvibes.com` | `/root/late.kodingvibes.com` | `git pull` → `extract-vendor.sh` → build shell → copy to `/var/www/html/` → restart chat-bridge Docker if `services/chat-bridge/` changed → `nginx -s reload`. |
+| `kodingvibes/late-micro-radio` | `/root/late-micro-radio` | `git pull` → `scripts/build-micro-radio.sh` (versioned to `/var/www/html/micro/radio/...`). |
+| `kodingvibes/late-micro-chat` | `/root/late-micro-chat` | `git pull` → `scripts/build-micro-chat.sh` (versioned to `/var/www/html/micro/chat/...`). |
+
+Webhook endpoint: `https://late.kodingvibes.com/deploy-webhook`  
+Health/logs: `https://late.kodingvibes.com/deploy-health`, `https://late.kodingvibes.com/deploy-logs`  
+Service: `late-deployd.service` (systemd) running `services/deployd/main.py` on `127.0.0.1:9200`.  
+Secret: `/root/.deployd.env` (`GITHUB_WEBHOOK_SECRET`).  
+Logs: `/var/log/late-deployd/`.
+
+Deploys are asynchronous (returns HTTP 202) so GitHub does not retry while a build runs. A per-repo lock prevents concurrent deploys of the same repo.
+
+## Commands (run from repo root)
+- **Manual deploy shell (fallback):** `cd late-web-ui && npm run build && rm -rf /var/www/html/assets /var/www/html/index.html && cp -r dist/. /var/www/html/ && nginx -s reload`
+- **Manual deploy radio (fallback):** `bash scripts/build-micro-radio.sh`
+- **Manual deploy chat (fallback):** `bash scripts/build-micro-chat.sh`
 - **Rebuild vendor:** `bash scripts/extract-vendor.sh`
 - **Typecheck shell:** `cd late-web-ui && npm run lint`
+- **Restart deployd:** `systemctl restart late-deployd`
+- **View deployd logs:** `journalctl -u late-deployd -f`
 - **Restart icecast:** `docker restart icecast`
 - **Restart ffmpeg relays:** `bash scripts/start_soma_relays.sh`
 - **Restart metadata relay:** `pkill -f soma_metadata_relay; python3 scripts/soma_metadata_relay.py > /tmp/soma_metadata_relay.log 2>&1 &`
