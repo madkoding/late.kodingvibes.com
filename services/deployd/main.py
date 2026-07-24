@@ -173,7 +173,7 @@ def deploy_shell_and_backend(repo_path: str, log: list[str]) -> int:
         return rc
 
     if chat_bridge_changed(repo_path):
-        log.append("[{now_iso()}] chat-bridge changed; restarting container")
+        log.append(f"[{now_iso()}] chat-bridge changed; restarting container")
         rrc, rout, rerr = run(["bash", "/root/restart-chat-bridge.sh"])
         log.append(rout.rstrip())
         if rerr:
@@ -182,7 +182,7 @@ def deploy_shell_and_backend(repo_path: str, log: list[str]) -> int:
             log.append(f"chat-bridge restart failed: {rrc}")
             return rrc
     else:
-        log.append("[{now_iso()}] chat-bridge not changed; skipping container restart")
+        log.append(f"[{now_iso()}] chat-bridge not changed; skipping container restart")
 
     log.append(f"[{now_iso()}] reload nginx")
     rc, out, err = run(["nginx", "-s", "reload"])
