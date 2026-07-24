@@ -4,6 +4,7 @@ import logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from services.broadcaster import ws_manager
 from services.voice_rooms import voice_rooms
+from core.config import EDIT_WINDOW_SECONDS
 from core.db import db
 
 log = logging.getLogger("chat-bridge")
@@ -29,7 +30,14 @@ async def chat_ws(ws: WebSocket, token: str = None):
     if became_online:
         await ws_manager.broadcast_online(user_id, True)
     try:
-        await ws.send_text(json.dumps({"type": "hello", "user": {"id": user_id, "display_name": session["display_name"]}}))
+        # edit_window_seconds travels with the greeting so the client can
+        # decide whether to offer the Edit action without hardcoding a number
+        # that could drift from the server's. The server still re-checks it.
+        await ws.send_text(json.dumps({
+            "type": "hello",
+            "user": {"id": user_id, "display_name": session["display_name"]},
+            "edit_window_seconds": EDIT_WINDOW_SECONDS,
+        }))
         async with voice_rooms.lock:
             active_room_ids = [rid for rid, members in voice_rooms.rooms.items() if members]
         for rid in active_room_ids:
