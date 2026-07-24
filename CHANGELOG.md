@@ -1,3 +1,10 @@
+## [1.0.1](https://github.com/kodingvibes/late.kodingvibes.com/compare/v1.0.0...v1.0.1) (2026-07-24)
+
+
+### Bug Fixes
+
+* **deploy:** restart chat-bridge on every shell deploy and verify unfurl health ([814cda6](https://github.com/kodingvibes/late.kodingvibes.com/commit/814cda600597f8a6e7bf1f970b85bafb0393f110))
+
 # 1.0.0 (2026-07-24)
 
 
