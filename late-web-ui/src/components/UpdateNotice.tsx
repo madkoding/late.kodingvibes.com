@@ -9,6 +9,16 @@ interface OutdatedInfo {
 }
 
 const POLL_MS = 30_000
+const AUTO_RELOAD_MS = 5_000
+
+function isUserBusy(): boolean {
+  const el = document.activeElement as HTMLElement | null
+  if (!el) return false
+  const tag = el.tagName
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true
+  if (el.isContentEditable) return true
+  return false
+}
 
 function readSeen(): Record<Source, string> {
   try {
@@ -35,7 +45,33 @@ async function fetchManifest(url: string): Promise<string | null> {
 
 export function UpdateNotice() {
   const [info, setInfo] = useState<OutdatedInfo | null>(null)
+  const [dismissed, setDismissed] = useState(false)
   const loc = useLocation()
+
+  useEffect(() => {
+    if (!info || dismissed) return
+    // ponytail: auto-reload after AUTO_RELOAD_MS so the user doesn't
+    // have to click the button. We delay if they're typing into an
+    // input/textarea/contenteditable, and re-check periodically while
+    // the toast is up. Cancel button in the toast stops the timer.
+    let cancelled = false
+    let timer: number | null = null
+    const arm = () => {
+      if (cancelled) return
+      if (isUserBusy()) {
+        timer = window.setTimeout(arm, 1_500)
+        return
+      }
+      timer = window.setTimeout(() => {
+        if (!cancelled && !isUserBusy()) location.reload()
+      }, AUTO_RELOAD_MS)
+    }
+    arm()
+    return () => {
+      cancelled = true
+      if (timer !== null) window.clearTimeout(timer)
+    }
+  }, [info, dismissed])
 
   useEffect(() => {
     let cancelled = false
@@ -88,7 +124,7 @@ export function UpdateNotice() {
     }
   }, [])
 
-  if (!info || info.sources.size === 0) return null
+  if (!info || info.sources.size === 0 || dismissed) return null
 
   // Only show the toast for the source the user is actually looking at.
   // The shell update is global; the micro updates only matter on their
@@ -118,6 +154,14 @@ export function UpdateNotice() {
         className="bg-white text-indigo-700 px-2.5 py-1 rounded-full font-bold hover:bg-indigo-50"
       >
         Actualizar
+      </button>
+      <button
+        onClick={() => setDismissed(true)}
+        className="bg-indigo-500/40 text-white/90 hover:text-white hover:bg-indigo-500/70 px-2 py-1 rounded-full font-medium"
+        aria-label="Cancelar actualización"
+        title="Cancelar"
+      >
+        ✕
       </button>
     </div>
   )
