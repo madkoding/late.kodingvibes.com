@@ -116,18 +116,6 @@ export function UpdateNotice() {
 
   useEffect(() => {
     let cancelled = false
-    // Seed localStorage with whatever is currently running so the first
-    // tick doesn't fire a toast for the version the user just loaded.
-    const seen = readSeen()
-    let primed = seen.radio !== '' && seen.chat !== ''
-    if (!primed) {
-      const seed: Record<Source, string> = {
-        shell: APP_VERSION,
-        radio: seen.radio || APP_VERSION,
-        chat: seen.chat || APP_VERSION,
-      }
-      writeSeen(seed)
-    }
 
     const tick = async () => {
       const [shellV, radioV, chatV] = await Promise.all([
@@ -137,10 +125,24 @@ export function UpdateNotice() {
       ])
       if (cancelled) return
       const current = readSeen()
+
+      // On first run (or after clearing storage/caches), seed with the
+      // versions the server is currently reporting. Do NOT fire the toast
+      // for the version the user just loaded — that would cause a reload
+      // loop on every fresh session/cache clear.
+      if (current.radio === '' || current.chat === '') {
+        writeSeen({
+          shell: shellV || APP_VERSION,
+          radio: radioV || current.radio,
+          chat: chatV || current.chat,
+        })
+        return
+      }
+
       const outdated = new Set<Source>()
       if (shellV && shellV !== APP_VERSION && shellV !== current.shell) outdated.add('shell')
-      if (radioV && radioV !== current.radio && current.radio !== '') outdated.add('radio')
-      if (chatV && chatV !== current.chat && current.chat !== '') outdated.add('chat')
+      if (radioV && radioV !== current.radio) outdated.add('radio')
+      if (chatV && chatV !== current.chat) outdated.add('chat')
       if (outdated.size > 0) {
         // Mark as seen so the next tick doesn't double-fire. The user
         // either reloads (which updates APP_VERSION on next mount) or

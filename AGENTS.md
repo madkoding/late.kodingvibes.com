@@ -86,7 +86,7 @@ late.kodingvibes.com/                (this repo, the shell)
 - **Served by:** nginx directly from `/var/www/html/`. `vite-spa.service` is **inactive** in production.
 - **CRITICAL — build after EVERY frontend change:** see **Deploy checklist** below. Do not copy to `/var/www/html/` manually; the server-side auto-deploy handles that.
 - **Typecheck only (faster sanity check before build):** `cd late-web-ui && npm run lint`
-- **Versioning:** bump `APP_VERSION` in `late-web-ui/src/lib/version.ts` for EVERY change (feature or fix). It renders as a pill next to the site name in the header, so a hard-reload after deploy tells you at a glance whether the new bundle is live. Current: **v1.38.0**.
+- **Versioning:** bump `APP_VERSION` in `late-web-ui/src/lib/version.ts` for EVERY change (feature or fix). It renders as a pill next to the site name in the header, so a hard-reload after deploy tells you at a glance whether the new bundle is live. Current: **v1.38.1**.
 - **Dependencies:** `react`, `react-dom`, `react-router-dom`, `lucide-react`. The shell does NOT need `marked`, `dompurify`, `zustand`, `msw` — those live in the micros now.
 
 ### 2. late-micro-radio (`/root/late-micro-radio`, separate repo)
