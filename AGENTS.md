@@ -86,7 +86,7 @@ late.kodingvibes.com/                (this repo, the shell)
 - **Served by:** nginx directly from `/var/www/html/`. `vite-spa.service` is **inactive** in production.
 - **CRITICAL — build after EVERY frontend change:** see **Deploy checklist** below. Do not copy to `/var/www/html/` manually; the server-side auto-deploy handles that.
 - **Typecheck only (faster sanity check before build):** `cd late-web-ui && npm run lint`
-- **Versioning:** bump `APP_VERSION` in `late-web-ui/src/lib/version.ts` for EVERY change (feature or fix). It renders as a pill next to the site name in the header, so a hard-reload after deploy tells you at a glance whether the new bundle is live. Current: **v1.37.0**.
+- **Versioning:** bump `APP_VERSION` in `late-web-ui/src/lib/version.ts` for EVERY change (feature or fix). It renders as a pill next to the site name in the header, so a hard-reload after deploy tells you at a glance whether the new bundle is live. Current: **v1.38.0**.
 - **Dependencies:** `react`, `react-dom`, `react-router-dom`, `lucide-react`. The shell does NOT need `marked`, `dompurify`, `zustand`, `msw` — those live in the micros now.
 
 ### 2. late-micro-radio (`/root/late-micro-radio`, separate repo)
@@ -127,9 +127,9 @@ late.kodingvibes.com/                (this repo, the shell)
 - When a newer version is detected, it shows a toast; after a short grace period, or immediately when the user clicks **Actualizar**, it calls `applyUpdate()`:
   1. Deletes every entry in the browser's `CacheStorage` (application caches), **only** for late assets — never touches `localStorage` auth tokens or other site data.
   2. Removes `late.seen` (the UpdateNotice own version marker).
-  3. Calls `location.reload()` so the browser fetches the latest `index.html`, `vendor/vendor.js`, `entry.js`, and CSS with no stale cached bundles.
-- The auto-deploy on the server is now responsible for swapping the `latest` symlink and updating `latest.json`; the front only needs to clear its own content caches and reload.
-- Safari/iOS historically keeps immutable HTTP-cache entries even after `caches.delete()`, so the `?v=` query string in `index.html` is the primary defense; the CacheStorage wipe is the secondary defense for PWA/offline caches.
+  3. Forces a hard navigation to `location.href + ?late_cb=<timestamp>` so Safari/iOS treats the next load as a brand-new request and cannot reuse its immutable HTTP cache for `index.html` or the MF bundles.
+- **Why a hard navigation is required on Safari/iOS:** Safari keeps `Cache-Control: immutable, max-age=31536000` entries even after `caches.delete()`. A plain `location.reload()` can still serve the old cached files. The `?late_cb` query string breaks that. The `?v=` query string in `index.html` is the normal defense for routine deploys; the `?late_cb` hard navigation is the fallback defense used by the update toast.
+- **CRITICAL:** `index.html` only knows the micro versions that existed when the shell was last built. If a micro deploys but the shell is **not** rebuilt, `index.html` keeps pointing at the old `?v=` and Safari can keep serving the old bundle body. Therefore the shell must be rebuilt (and redeployed) after every micro deploy so `index.html` emits fresh `?v=` values.
 
 ## Deploy checklist (mandatory after EVERY change, no exceptions)
 1. Bump the relevant version: `APP_VERSION` (shell) or `version` (micro package.json).

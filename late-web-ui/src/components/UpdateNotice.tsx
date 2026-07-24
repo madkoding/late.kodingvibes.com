@@ -63,7 +63,14 @@ function clearContentCache(): Promise<void> {
 
 async function applyUpdate() {
   await clearContentCache()
-  location.reload()
+  // Safari (especially iOS) keeps immutable HTTP-cache entries even after
+  // CacheStorage is wiped. A plain location.reload() can still serve the
+  // cached index.html / MF files. We force a hard navigation with a unique
+  // query string so the browser treats it as a brand-new request. The query
+  // param is consumed by nginx and never read by the app.
+  const url = new URL(location.href)
+  url.searchParams.set('late_cb', Date.now().toString())
+  location.href = url.toString()
 }
 
 async function fetchManifest(url: string): Promise<string | null> {
