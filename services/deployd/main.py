@@ -194,7 +194,7 @@ def deploy_shell_and_backend(repo_path: str, log: list[str]) -> int:
         return rc
 
     if deployd_changed(repo_path):
-        log.append("[{now_iso()}] deployd code changed; scheduling self-restart")
+        log.append(f"[{now_iso()}] deployd code changed; scheduling self-restart")
         run(["systemctl", "restart", "late-deployd"])
 
     return 0
