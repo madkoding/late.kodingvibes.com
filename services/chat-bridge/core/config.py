@@ -12,3 +12,9 @@ ATTACHMENT_TTL_DAYS = int(os.environ.get("ATTACHMENT_TTL_DAYS", "7"))
 ALLOWED_MIME_PREFIXES = ("image/", "audio/", "video/", "text/", "application/pdf", "application/zip", "application/x-rar", "application/x-tar", "application/gzip", "application/json", "application/octet-stream")
 
 LINK_PREVIEW_TTL_SECONDS = int(os.environ.get("LINK_PREVIEW_TTL_SECONDS", "21600"))
+
+# How long after sending an author may still edit their own message.
+# 15 minutes, same as WhatsApp. The client reads this from the ws `hello`
+# frame to decide whether to offer the Edit action, but the server is the
+# authority and re-checks it on every PATCH.
+EDIT_WINDOW_SECONDS = int(os.environ.get("EDIT_WINDOW_SECONDS", "900"))

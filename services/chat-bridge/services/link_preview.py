@@ -41,6 +41,14 @@ def _caption_before_markers(content: str) -> str:
             cut = idx
     return content[:cut]
 
+
+def has_attachment_marker(content: str) -> bool:
+    """True if the message carries an attachment payload. Such a message is
+    not editable text: its content is a machine marker (`__late_image__:<id>`)
+    that the client parses, so letting a user rewrite it would orphan the
+    attachment or forge a reference to someone else's."""
+    return any(marker in content for marker in _ATTACHMENT_MARKERS)
+
 USER_AGENT = "Mozilla/5.0 (compatible; late-chat-og/1.0; +https://late.kodingvibes.com) Discordbot/2.0"
 TIMEOUT = httpx.Timeout(connect=5.0, read=5.0, write=5.0, pool=5.0)
 MAX_REDIRECTS = 3

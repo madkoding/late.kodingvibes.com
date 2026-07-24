@@ -195,6 +195,24 @@ def delete_message(message_id: int):
         conn.execute("UPDATE messages SET content = ?, hidden = 1, og_data = NULL WHERE id = ?", ("[eliminado]", message_id))
 
 
+def edit_message(message_id: int, content: str) -> int:
+    """Rewrite a message's content and stamp `edited_at`. Returns the
+    timestamp so the caller can put it in the broadcast without a re-read.
+    Authorization and the edit window are enforced by the caller."""
+    now = int(time.time())
+    with db() as conn:
+        conn.execute(
+            "UPDATE messages SET content = ?, edited_at = ? WHERE id = ?",
+            (content, now, message_id),
+        )
+    return now
+
+
+def clear_og_data(message_id: int):
+    with db() as conn:
+        conn.execute("UPDATE messages SET og_data = NULL WHERE id = ?", (message_id,))
+
+
 def get_message(message_id: int) -> dict | None:
     with db() as conn:
         row = conn.execute(

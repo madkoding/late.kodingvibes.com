@@ -1,17 +1,19 @@
 from fastapi import APIRouter, Depends, HTTPException
 from typing import Optional
 from core.auth import get_session_user
-from schemas.chat import SendMessageRequest, ForwardRequest
-from repositories.messages import send_message, list_messages, hide_message, delete_message, get_message, forward_message
+from schemas.chat import SendMessageRequest, ForwardRequest, EditMessageRequest
+from repositories.messages import send_message, list_messages, hide_message, delete_message, get_message, forward_message, edit_message, clear_og_data
 from repositories.channels import is_member
 from repositories.receipts import mark_delivered
 from services.broadcaster import ws_manager
 from services.notifications import send_to_kv
-from services.link_preview import extract_urls, fetch_og
+from services.link_preview import extract_urls, fetch_og, has_attachment_marker
+from core.config import EDIT_WINDOW_SECONDS
 from core.db import db
 import asyncio
 import json
 import logging
+import time
 
 log = logging.getLogger("chat-bridge")
 router = APIRouter()
@@ -21,6 +23,17 @@ async def _enrich_og_and_broadcast(msg_id: int, channel_id: int, url: str):
     if og.get("kind") == "error":
         return
     with db() as conn:
+        # The fetch can take several seconds (5s/hop, up to 3 redirects). In that
+        # window the author may have edited the message to drop or change this
+        # link - an edit that already cleared og_data. Without this re-check the
+        # stale card would be resurrected and never cleared again. Re-validate
+        # that `url` is still the message's first URL before writing.
+        row = conn.execute("SELECT content FROM messages WHERE id = ?", (msg_id,)).fetchone()
+        if not row:
+            return
+        current = extract_urls(row["content"])
+        if not current or current[0] != url:
+            return
         conn.execute("UPDATE messages SET og_data = ? WHERE id = ?", (json.dumps(og), msg_id))
     await ws_manager.broadcast_to_channel_members(channel_id, {"type": "message_og", "data": {"id": msg_id, "og_data": og}})
 
@@ -92,6 +105,56 @@ async def send_message_route(channel_id: int, req: SendMessageRequest, session: 
     if urls and not is_action:
         asyncio.create_task(_enrich_og_and_broadcast(msg["id"], channel_id, urls[0]))
     return msg
+
+@router.patch("/api/chat/messages/{message_id}")
+async def edit_message_route(message_id: int, req: EditMessageRequest, session: dict = Depends(get_session_user)):
+    """Author-only, time-boxed edit. Deliberately NOT open to admins/mods:
+    they already have hide and delete, and rewriting someone else's words
+    is a different and worse power than removing them.
+
+    Editing never notifies. Mentions are resolved once, when the message is
+    first sent, so adding `@someone` in an edit does not ping them - which
+    also means an edit cannot be used to re-notify a channel repeatedly."""
+    content = req.content.strip()
+    if not content:
+        raise HTTPException(400, "Empty message")
+    if len(content) > 2_000_000:
+        raise HTTPException(400, "Message too long")
+    with db() as conn:
+        msg = conn.execute(
+            "SELECT m.*, c.id as ch_id FROM messages m JOIN channels c ON c.id = m.channel_id WHERE m.id = ?",
+            (message_id,),
+        ).fetchone()
+        if not msg:
+            raise HTTPException(404, "Message not found")
+        if msg["user_id"] != session["user_id"]:
+            raise HTTPException(403, "Not allowed")
+        if msg["hidden"]:
+            raise HTTPException(400, "Cannot edit a deleted message")
+        if has_attachment_marker(msg["content"]) or has_attachment_marker(content):
+            raise HTTPException(400, "Cannot edit an attachment message")
+        if int(time.time()) - msg["created_at"] > EDIT_WINDOW_SECONDS:
+            raise HTTPException(400, "Edit window expired")
+        channel_id = msg["ch_id"]
+        old_content = msg["content"]
+    edited_at = edit_message(message_id, content)
+    await ws_manager.broadcast_to_channel_members(channel_id, {
+        "type": "edit",
+        "data": {"message_id": message_id, "channel_id": channel_id, "content": content, "edited_at": edited_at},
+    })
+    # The card that was attached to the old text is now lying about the new
+    # text, so re-resolve it whenever the first link changed. Dropping the
+    # link entirely has to clear the card too, hence the explicit null push.
+    old_urls = extract_urls(old_content)
+    new_urls = extract_urls(content)
+    old_first = old_urls[0] if old_urls else None
+    new_first = new_urls[0] if new_urls else None
+    if old_first != new_first and not msg["is_action"]:
+        clear_og_data(message_id)
+        await ws_manager.broadcast_to_channel_members(channel_id, {"type": "message_og", "data": {"id": message_id, "og_data": None}})
+        if new_first:
+            asyncio.create_task(_enrich_og_and_broadcast(message_id, channel_id, new_first))
+    return {"ok": True, "content": content, "edited_at": edited_at}
 
 @router.post("/api/chat/messages/{message_id}/hide")
 async def hide_message_route(message_id: int, session: dict = Depends(get_session_user)):

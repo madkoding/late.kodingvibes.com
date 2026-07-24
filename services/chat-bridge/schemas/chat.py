@@ -15,6 +15,9 @@ class SendMessageRequest(BaseModel):
     is_action: bool = False
     reply_to: Optional[int] = None
 
+class EditMessageRequest(BaseModel):
+    content: str
+
 class WebhookPayload(BaseModel):
     event: str
     data: dict
