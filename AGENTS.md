@@ -148,8 +148,8 @@ Pushing to `main` on the managed repos triggers an automatic deploy on this host
 | Repo | Local path | Deploy action |
 |------|------------|---------------|
 | `kodingvibes/late.kodingvibes.com` | `/root/late.kodingvibes.com` | `git pull` → `extract-vendor.sh` → build shell → copy to `/var/www/html/` → restart chat-bridge Docker if `services/chat-bridge/` changed → `nginx -s reload`. |
-| `kodingvibes/late-micro-radio` | `/root/late-micro-radio` | `git pull` → `scripts/build-micro-radio.sh` (versioned to `/var/www/html/micro/radio/...`). |
-| `kodingvibes/late-micro-chat` | `/root/late-micro-chat` | `git pull` → `scripts/build-micro-chat.sh` (versioned to `/var/www/html/micro/chat/...`). |
+| `kodingvibes/late-micro-radio` | `/root/late-micro-radio` | `git pull` → `scripts/build-micro-radio.sh` → `extract-vendor.sh` → **rebuild shell** → copy to `/var/www/html/` → `nginx -s reload`. |
+| `kodingvibes/late-micro-chat` | `/root/late-micro-chat` | `git pull` → `scripts/build-micro-chat.sh` → `extract-vendor.sh` → **rebuild shell** → copy to `/var/www/html/` → `nginx -s reload`. |
 
 Webhook endpoint: `https://late.kodingvibes.com/deploy-webhook`  
 Health/logs: `https://late.kodingvibes.com/deploy-health`, `https://late.kodingvibes.com/deploy-logs`  
@@ -157,7 +157,7 @@ Service: `late-deployd.service` (systemd) running `services/deployd/main.py` on 
 Secret: `/root/.deployd.env` (`GITHUB_WEBHOOK_SECRET`).  
 Logs: `/var/log/late-deployd/`.
 
-Deploys are asynchronous (returns HTTP 202) so GitHub does not retry while a build runs. A per-repo lock prevents concurrent deploys of the same repo.
+Deploys are asynchronous (returns HTTP 202) so GitHub does not retry while a build runs. A per-repo lock prevents concurrent deploys of the same repo; a global lock prevents concurrent writes to `/var/www/html/`.
 
 ## Commands (run from repo root)
 - **Manual deploy radio (fallback):** `bash scripts/build-micro-radio.sh`
