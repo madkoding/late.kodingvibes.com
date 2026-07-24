@@ -4,36 +4,17 @@ import tailwindcss from "@tailwindcss/vite";
 import path from "node:path";
 
 // ponytail: microfront URLs are STABLE (no version in the path) so the
-// browser can keep the bundle in cache across deploys. Nginx serves
-// /micro/{radio,chat}/entry.js via a `latest` symlink that points at the
-// most recent version. When a new version ships:
-//   1. The new bundle replaces /micro/radio/v0.1.2/entry.js on disk.
-//   2. The `latest` symlink is repointed at v0.1.2.
-//   3. The next page load sees the same URL but the symlink now points
-//      to the new file. The browser sends a conditional GET; nginx
-//      answers 200 (new file) or 304 (unchanged) based on ETag.
-// The shell's index.html is unchanged between micro releases, so the
-// only thing the browser re-validates is the entry.js (and the CSS).
-// Version bumps in the shell's package.json are the right time to
-// touch the symlink.
-//
-// The version constants remain here as a deployment-time check
-// (we still want the build to fail if the symlink points at a version
-// the build pipeline doesn't know about). They are NOT used in the
-// emitted HTML.
-const MICRO_RADIO_VERSION = "v0.1.1";
-const MICRO_CHAT_VERSION  = "v0.1.1";
-
+// browser keeps the bundle in cache across deploys. Nginx serves
+// /micro/{radio,chat}/entry.js via a `latest` symlink that points at
+// the most recent version. New deploy replaces the symlink target;
+// the browser re-validates on next page load via ETag, no shell
+// redeploy required.
 const microfrontsPlugin: Plugin = {
   name: "late-microfronts",
   transformIndexHtml: {
     order: "post",
     handler(html, ctx) {
       if (!ctx.filename.endsWith("index.html")) return html;
-      // ponytail: use the `latest` symlink as the URL — nginx handles
-      // the indirection. Same ETag policy (immutable 1y) but the URL
-      // doesn't change between micro releases, so returning users hit
-      // the browser's HTTP cache instead of re-downloading.
       const radio = `/micro/radio/latest`;
       const chat  = `/micro/chat/latest`;
       const tags = [

@@ -30,4 +30,10 @@ rsync -a --delete dist/ "$DEST/v$VERSION/"
 # Update the "latest" symlink so the shell can reference it without a version.
 ln -sfn "v$VERSION" "$DEST/latest"
 
+# Write latest.json so the shell's UpdateNotice can detect an upgrade while
+# the user is already on the page. Cache-Control: no-cache; tiny payload.
+cat > "$DEST/latest.json" <<EOF
+{"version":"$VERSION","name":"radio"}
+EOF
+
 echo "[build-micro-radio] deployed to $DEST/v$VERSION"

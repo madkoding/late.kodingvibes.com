@@ -60,7 +60,31 @@
     </script>
   </head>
   <body class="h-full bg-slate-950 text-slate-100">
-    <div id="root" class="h-full"></div>
+    <div id="root" class="h-full">
+      <div id="app-boot-loader" style="position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1rem;background:#020617;font-family:ui-sans-serif,system-ui,sans-serif;">
+        <div style="display:flex;align-items:center;gap:.75rem;">
+          <span style="display:inline-flex;align-items:center;justify-content:center;width:3.5rem;height:3.5rem;border-radius:1rem;background:linear-gradient(135deg,#6366f1,#a855f7,#ec4899);color:#fff;box-shadow:0 10px 25px -5px rgba(99,102,241,.4);">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:1.5rem;height:1.5rem;" aria-hidden="true">
+              <path d="M18 8h1a4 4 0 0 1 0 8h-1" />
+              <path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z" />
+              <line x1="6" y1="1" x2="6" y2="4" />
+              <line x1="10" y1="1" x2="10" y2="4" />
+              <line x1="14" y1="1" x2="14" y2="4" />
+            </svg>
+          </span>
+          <span style="font-size:1.125rem;font-weight:800;letter-spacing:-.01em;color:#f1f5f9;">late.kodingvibes.com</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:.5rem;color:#64748b;font-size:.8125rem;">
+          <span style="width:.5rem;height:.5rem;border-radius:9999px;background:#818cf8;animation:late-boot-pulse 1s ease-in-out infinite;"></span>
+          <span style="width:.5rem;height:.5rem;border-radius:9999px;background:#a78bfa;animation:late-boot-pulse 1s ease-in-out .15s infinite;"></span>
+          <span style="width:.5rem;height:.5rem;border-radius:9999px;background:#f472b6;animation:late-boot-pulse 1s ease-in-out .3s infinite;"></span>
+          <span style="margin-left:.5rem;">cargando…</span>
+        </div>
+      </div>
+      <style>
+        @keyframes late-boot-pulse { 0%,100%{opacity:.25;transform:scale(.85);} 50%{opacity:1;transform:scale(1.1);} }
+      </style>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

@@ -24,4 +24,10 @@ rsync -a --delete dist/ "$DEST/v$VERSION/"
 
 ln -sfn "v$VERSION" "$DEST/latest"
 
+# Write latest.json so the shell's UpdateNotice can detect an upgrade while
+# the user is already on the page. Cache-Control: no-cache; tiny payload.
+cat > "$DEST/latest.json" <<EOF
+{"version":"$VERSION","name":"chat"}
+EOF
+
 echo "[build-micro-chat] deployed to $DEST/v$VERSION"
