@@ -1,3 +1,10 @@
+# [1.1.0](https://github.com/kodingvibes/late.kodingvibes.com/compare/v1.0.1...v1.1.0) (2026-07-24)
+
+
+### Features
+
+* time-boxed author-only message editing ([47f5bca](https://github.com/kodingvibes/late.kodingvibes.com/commit/47f5bca535f4120f391d82536ef0afaaa83a29a0))
+
 ## [1.0.1](https://github.com/kodingvibes/late.kodingvibes.com/compare/v1.0.0...v1.0.1) (2026-07-24)
 
 
