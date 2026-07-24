@@ -69,6 +69,7 @@ from routers.attachments import router as attachments_router
 from routers.buzz import router as buzz_router
 from routers.webhook import router as webhook_router
 from routers.ws import router as ws_router
+from routers.link_preview import router as link_preview_router
 import voice
 
 app.include_router(auth_router)
@@ -81,4 +82,5 @@ app.include_router(attachments_router)
 app.include_router(buzz_router)
 app.include_router(webhook_router)
 app.include_router(ws_router)
+app.include_router(link_preview_router)
 app.include_router(voice.router)

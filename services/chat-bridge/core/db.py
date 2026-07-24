@@ -93,6 +93,11 @@ def _run_migrations(conn):
             is_collapsed INTEGER NOT NULL DEFAULT 0,
             created_at INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS link_previews (
+            url TEXT PRIMARY KEY,
+            data TEXT NOT NULL,
+            fetched_at INTEGER NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS message_delivered (
             message_id INTEGER NOT NULL,
             user_id INTEGER NOT NULL,
