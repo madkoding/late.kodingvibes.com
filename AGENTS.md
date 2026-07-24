@@ -86,7 +86,7 @@ late.kodingvibes.com/                (this repo, the shell)
 - **Served by:** nginx directly from `/var/www/html/`. `vite-spa.service` is **inactive** in production.
 - **CRITICAL — build after EVERY frontend change:** see **Deploy checklist** below. Do not copy to `/var/www/html/` manually; the server-side auto-deploy handles that.
 - **Typecheck only (faster sanity check before build):** `cd late-web-ui && npm run lint`
-- **Versioning:** bump `APP_VERSION` in `late-web-ui/src/lib/version.ts` for EVERY change (feature or fix). It renders as a pill next to the site name in the header, so a hard-reload after deploy tells you at a glance whether the new bundle is live. Current: **v1.38.1**.
+- **Versioning:** managed by [Semantic Release](https://semantic-release.gitbook.io/semantic-release). Do **not** bump `APP_VERSION` manually. Use [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `chore:`, `docs:`, `BREAKING CHANGE:`) so the GitHub Action on `main` can compute the next version, update `late-web-ui/package.json`, sync `late-web-ui/src/lib/version.ts`, and create a GitHub release. Current: **v1.38.1**.
 - **Dependencies:** `react`, `react-dom`, `react-router-dom`, `lucide-react`. The shell does NOT need `marked`, `dompurify`, `zustand`, `msw` — those live in the micros now.
 
 ### 2. late-micro-radio (`/root/late-micro-radio`, separate repo)
@@ -96,19 +96,20 @@ late.kodingvibes.com/                (this repo, the shell)
 - **Streams list:** 18 SomaFM channels in `src/data/streams.ts`.
 - **UI:** `src/pages/Icecast/IcecastPage.tsx` with `MountCard` + `useIcecastStatus` (polls `/status-json.xsl` for listeners + metadata).
 - **Metadata push:** `IcecastPage` calls `window.RadioEngine.setTrack({artist, title, raw})` on every status tick so the shell's MiniPlayer updates mid-play.
-- **Build:** `bash scripts/build-micro-radio.sh` (rebuilds, rsyncs to `/var/www/html/micro/radio/vX.Y.Z/`). Current: **v0.1.0**.
+- **Build:** `bash scripts/build-micro-radio.sh` (rebuilds, rsyncs to `/var/www/html/micro/radio/vX.Y.Z/`).
+- **Versioning:** managed by Semantic Release in the `late-micro-radio` repo. Do **not** bump its `package.json` version manually; use Conventional Commits and push to `main`. The release workflow creates a GitHub release and the deployd auto-deploy picks it up.
 - **Deploy checklist (after radio change):**
-  1. Bump `version` in `/root/late-micro-radio/package.json`.
-  2. Update `MICRO_RADIO_VERSION` constant in `late-web-ui/vite.config.ts` (the microfrontsPlugin).
-  3. `bash scripts/build-micro-radio.sh` — bundle goes to `/var/www/html/micro/radio/vX.Y.Z/`.
-  4. `cd late-web-ui && npm run build` — shell re-emits the new `<script src>`.
+  1. Ensure the radio commit follows Conventional Commits so Semantic Release produces a new version.
+  2. `bash scripts/build-micro-radio.sh` — bundle goes to `/var/www/html/micro/radio/vX.Y.Z/`.
+  3. `cd late-web-ui && npm run build` — shell re-emits the new `<script src>`.
 
 ### 3. late-micro-chat (`/root/late-micro-chat`, separate repo)
 - **Stack:** Vite + React 18 + Tailwind 4, lib ESM.
 - **Owns:** chat-bridge WebSocket client, voice rooms (uses `window.RadioEngine.getAnalyser()` for visualizers).
 - **Mounts in:** `<div id="micro-chat-root">` (placed by the shell on `/irc`).
 - **UI:** `src/pages/Irc/IrcPage.tsx` + 30+ components in `src/components/irc/`. WebRTC voice rooms in `src/voice/`. Domain types in `src/lib/chat/`.
-- **Build:** `bash scripts/build-micro-chat.sh`. Current: **v0.1.0**.
+- **Build:** `bash scripts/build-micro-chat.sh`.
+- **Versioning:** managed by Semantic Release in the `late-micro-chat` repo. Do **not** bump its `package.json` version manually; use Conventional Commits and push to `main`.
 - **Deploy checklist (after chat change):** same pattern as radio.
 
 ### Shared React vendor
@@ -132,13 +133,22 @@ late.kodingvibes.com/                (this repo, the shell)
 - **CRITICAL:** `index.html` only knows the micro versions that existed when the shell was last built. If a micro deploys but the shell is **not** rebuilt, `index.html` keeps pointing at the old `?v=` and Safari can keep serving the old bundle body. Therefore the shell must be rebuilt (and redeployed) after every micro deploy so `index.html` emits fresh `?v=` values.
 
 ## Deploy checklist (mandatory after EVERY change, no exceptions)
-1. Bump the relevant version: `APP_VERSION` (shell) or `version` (micro package.json).
+1. Use Conventional Commits so Semantic Release bumps the version automatically. Do not bump `APP_VERSION` or micro `package.json` versions by hand.
 2. `bash scripts/extract-vendor.sh` if React/ReactDOM versions bumped (uncommon).
 3. `bash scripts/build-micro-{radio,chat}.sh` for each micro that changed.
 4. `cd late-web-ui && npm run build`
 5. If chat-bridge changed: `bash /root/restart-chat-bridge.sh`
 6. If Icecast config changed: `docker restart icecast`
 7. If relay scripts changed: `bash scripts/start_soma_relays.sh` and/or restart metadata relay
+
+## Semantic Release
+- All managed repos (`late.kodingvibes.com`, `late-micro-radio`, `late-micro-chat`) use [Semantic Release](https://semantic-release.gitbook.io/semantic-release) via `.github/workflows/release.yml`.
+- Commits on `main` must follow [Conventional Commits](https://www.conventionalcommits.org/):
+  - `feat:` → minor bump
+  - `fix:`, `perf:`, `revert:` → patch bump
+  - `BREAKING CHANGE:` in footer or `feat!:`/`fix!:` → major bump
+  - `chore:`, `docs:`, `style:`, `refactor:`, `test:` → no version bump (unless they include `BREAKING CHANGE`)
+- Releases are created automatically: version bump, `CHANGELOG.md`, GitHub release, and (for the shell) sync of `late-web-ui/package.json` + `late-web-ui/src/lib/version.ts`.
 
 ## Commands (run from repo root)
 ## Auto-deploy (late-deployd)
