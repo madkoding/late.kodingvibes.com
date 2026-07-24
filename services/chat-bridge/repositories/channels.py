@@ -6,6 +6,13 @@ from services.broadcaster import ws_manager
 def list_channels(user_id: int) -> list[dict]:
     with db() as conn:
         conn.execute("UPDATE users SET last_seen = ? WHERE id = ?", (int(time.time()), user_id))
+        # Ponytail: global super_admin / admin users get admin rights on
+        # every channel (joined or not) without a channel_members row.
+        # is_global_admin is 1 when the user holds a platform-level role.
+        global_admin = conn.execute(
+            "SELECT 1 AS is_global_admin FROM users WHERE id = ? AND global_role IN ('super_admin', 'admin')",
+            (user_id,),
+        ).fetchone()
         rows = conn.execute("""
             SELECT c.*,
                 EXISTS(SELECT 1 FROM channel_members WHERE channel_id = c.id AND user_id = ?) AS joined,
@@ -35,7 +42,7 @@ def list_channels(user_id: int) -> list[dict]:
                     "active_count": 0,
                     "voice_participants": 0,
                     "unread": 0,
-                    "my_role": None,
+                    "my_role": "admin" if global_admin else None,
                     "last_message": None,
                     "joined": False,
                 })
@@ -57,7 +64,7 @@ def list_channels(user_id: int) -> list[dict]:
                     "SELECT COUNT(*) AS c FROM messages WHERE channel_id = ? AND id > ?",
                     (r["id"], read_id),
                 ).fetchone()["c"]
-            my_role = conn.execute(
+            my_role_row = conn.execute(
                 "SELECT role FROM channel_members WHERE channel_id = ? AND user_id = ?",
                 (r["id"], user_id),
             ).fetchone()
@@ -74,7 +81,9 @@ def list_channels(user_id: int) -> list[dict]:
                 "active_count": active_count,
                 "voice_participants": 0,
                 "unread": unread,
-                "my_role": my_role["role"] if my_role else None,
+                # Global admins see admin on every channel, even ones
+                # where their per-channel role (if any) is just 'user'.
+                "my_role": "admin" if global_admin else (my_role_row["role"] if my_role_row else None),
                 "last_message": {
                     "id": r["last_message_id"],
                     "content": r["last_message_content"],

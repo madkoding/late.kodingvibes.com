@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from core.auth import get_session_user
+from core.auth import get_session_user, get_channel_role, is_global_admin
 from schemas.chat import CreateChannelRequest, UpdateChannelRequest, InviteRequest
 from repositories.channels import list_channels, get_channel, create_channel, update_channel, join_channel, leave_channel, is_member
 from repositories.receipts import mark_read
@@ -40,7 +40,27 @@ async def create_channel_route(req: CreateChannelRequest, session: dict = Depend
 
 @router.patch("/api/chat/channels/{channel_id}")
 async def update_channel_route(channel_id: int, req: UpdateChannelRequest, session: dict = Depends(get_session_user)):
+    # Ponytail: only channel admins or platform-level admins can move a
+    # channel between categories. Without this any member could shove
+    # channels around. Super admin bypasses the per-channel check.
+    if not is_global_admin(session):
+        role = get_channel_role(channel_id, session["user_id"])
+        if role != "admin":
+            raise HTTPException(403, "Only admins can update a channel")
     update_channel(channel_id, {"category_id": req.category_id, "position": req.position})
+    return {"ok": True}
+
+@router.delete("/api/chat/channels/{channel_id}")
+async def delete_channel_route(channel_id: int, session: dict = Depends(get_session_user)):
+    ch = get_channel(channel_id)
+    if not ch:
+        raise HTTPException(404, "Channel not found")
+    if not is_global_admin(session):
+        role = get_channel_role(channel_id, session["user_id"])
+        if role != "admin":
+            raise HTTPException(403, "Only admins can delete a channel")
+    with db() as conn:
+        conn.execute("DELETE FROM channels WHERE id = ?", (channel_id,))
     return {"ok": True}
 
 @router.post("/api/chat/channels/{channel_id}/join")

@@ -10,7 +10,7 @@ async def get_session_user(authorization: str = Header(None)) -> dict:
     token = authorization[7:]
     with db() as conn:
         session = conn.execute(
-            "SELECT s.id, s.user_id, s.expires_at, u.supabase_sub, u.email, u.display_name "
+            "SELECT s.id, s.user_id, s.expires_at, u.supabase_sub, u.email, u.display_name, u.global_role "
             "FROM sessions s JOIN users u ON u.id = s.user_id "
             "WHERE s.id = ? AND s.expires_at > ?",
             (token, int(time.time())),
@@ -32,6 +32,9 @@ def is_member(conn, channel_id: int, user_id: int) -> bool:
         (channel_id, user_id),
     ).fetchone()
     return row is not None
+
+def is_global_admin(session: dict) -> bool:
+    return session.get("global_role") in ("super_admin", "admin")
 
 def require_admin_or_mod(channel_id: int, user_id: int, conn) -> bool:
     row = conn.execute(

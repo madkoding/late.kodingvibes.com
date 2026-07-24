@@ -128,3 +128,40 @@ class TestMarkRead:
         r = await client.post(f"/api/chat/channels/{ch['id']}/read?message_id=1", headers=headers)
         assert r.status_code == 200
         assert r.json()["ok"] is True
+
+
+class TestDeleteChannel:
+    async def test_delete_as_admin(self, client, auth_headers, consume_admin_slot, make_session):
+        from core.db import db
+        headers, user = auth_headers
+        # Create a throwaway channel as a non-member user; the test user
+        # becomes admin via user_id=1 → 'admin' bootstrap.
+        r = await client.post("/api/chat/channels", json={"name": "to-delete"}, headers=headers)
+        ch = r.json()
+        r = await client.delete(f"/api/chat/channels/{ch['id']}", headers=headers)
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+        with db() as conn:
+            assert conn.execute("SELECT id FROM channels WHERE id = ?", (ch["id"],)).fetchone() is None
+
+    async def test_delete_as_super_admin_without_membership(self, client, auth_headers, consume_admin_slot, make_session):
+        from core.db import db
+        headers, _ = auth_headers
+        # Promote user to super_admin, then make a channel owned by someone else.
+        with db() as conn:
+            user_id = conn.execute("SELECT id FROM users WHERE email = 'test@example.com'").fetchone()["id"]
+            conn.execute("UPDATE users SET global_role = 'super_admin' WHERE id = ?", (user_id,))
+        other_session, _ = make_session("other3", "other3@example.com", "Other3")
+        r = await client.post("/api/chat/channels", json={"name": "other-channel"}, headers={"Authorization": f"Bearer {other_session}"})
+        other_ch = r.json()
+        r = await client.delete(f"/api/chat/channels/{other_ch['id']}", headers=headers)
+        assert r.status_code == 200
+
+    async def test_delete_as_plain_user_forbidden(self, client, auth_headers, consume_admin_slot, make_session):
+        headers, _ = auth_headers
+        # A second user is not admin and not in #lobby; can't delete it.
+        attacker_session, _ = make_session("attacker", "attacker@example.com", "Attacker")
+        h2 = {"Authorization": f"Bearer {attacker_session}"}
+        lobby_id = (await client.get("/api/chat/channels", headers=headers)).json()[0]["id"]
+        r = await client.delete(f"/api/chat/channels/{lobby_id}", headers=h2)
+        assert r.status_code == 403

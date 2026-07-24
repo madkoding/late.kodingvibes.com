@@ -127,6 +127,12 @@ def _run_migrations(conn):
     _run_idempotent_alter(conn, "channels", "channel_type", "TEXT NOT NULL DEFAULT 'text'")
     _run_idempotent_alter(conn, "channels", "category_id", "INTEGER REFERENCES channel_categories(id) ON DELETE SET NULL")
     _run_idempotent_alter(conn, "channels", "position", "INTEGER NOT NULL DEFAULT 0")
+    _run_idempotent_alter(conn, "users", "global_role", "TEXT NOT NULL DEFAULT 'user'")
+    # Ponytail: one-time bootstrap — the original creator of the chat
+    # (user_id=1 in every existing DB) becomes super_admin. Safe to run
+    # on every startup: only flips the bit when the column was just
+    # added and the user is still on the default 'user' value.
+    conn.execute("UPDATE users SET global_role = 'super_admin' WHERE id = 1 AND global_role = 'user'")
     conn.execute("UPDATE channel_members SET role = 'admin' WHERE user_id = 1 AND role IS NULL")
     _seed_categories(conn)
     _seed_channels(conn)

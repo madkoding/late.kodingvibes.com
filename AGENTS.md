@@ -60,6 +60,12 @@ late.kodingvibes.com/                (this repo, the shell)
 - SQLite lives at `/data/chat-bridge/chat.db` (bind mount so it survives container restarts).
 - **JWT shape it accepts:** HS256, `aud: "late.kodingvibes.com"`, `iss: "kodingvibes.com"`, signed with `SSO_BRIDGE_SECRET`.
 - **CRITICAL:** `SSO_BRIDGE_SECRET` MUST match the one in Vercel (kodingvibes project, prod env). If they drift, every exchange returns 401 and the front enters a redirect loop. To rotate: pick a new value, `vercel env rm SSO_BRIDGE_SECRET production --yes && vercel env add SSO_BRIDGE_SECRET production` in the kodingvibes repo, `vercel deploy --prod`, then update `/root/.env.backup` and restart the container.
+- **Role system** (see `core/db.py` migrations + `core/auth.py::is_global_admin`):
+  - `users.global_role` (column added on startup migration): `'super_admin'` | `'admin'` | `'user'` (default). Affects the whole platform, not a single channel.
+  - `channel_members.role` (per-channel): `'admin'` | `'mod'` | `NULL`. Unchanged. Moderator (mod) still only works inside the channel where it's set.
+  - `list_channels` returns `my_role='admin'` for any user whose `global_role IN ('super_admin','admin')`, on every channel — joined or not. Per-channel admin role is overridden by global admin in the response.
+  - Admin actions (delete channel, change role, mute, move channel category) check `is_global_admin(session)` first; if false, fall back to the per-channel admin/mod check. PATCH `/api/chat/channels/{id}` and DELETE `/api/chat/channels/{id}` are gated.
+  - Bootstrap: on first startup after the migration, `users.id = 1` is set to `super_admin` (idempotent). That's the original chat creator.
 
 ### Nginx Config
 - `/etc/nginx/sites-enabled/late.kodingvibes.com`
