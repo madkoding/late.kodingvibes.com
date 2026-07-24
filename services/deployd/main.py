@@ -47,6 +47,8 @@ REPOS = {
     },
 }
 
+SHELL_DIR = "/root/late.kodingvibes.com"
+
 LOG_DIR = Path(os.environ.get("LOG_DIR", "/var/log/late-deployd"))
 SECRET = os.environ.get("GITHUB_WEBHOOK_SECRET", "").encode()
 
@@ -61,8 +63,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger("deployd")
 
-# One lock per repo so concurrent pushes on the same repo queue instead of race.
+# Lock per repo so concurrent pushes on the same repo queue instead of racing.
 LOCKS: dict[str, threading.Lock] = {name: threading.Lock() for name in REPOS}
+# Global lock around any write to /var/www/html/ (shell copy or micro symlink updates).
+WWW_LOCK = threading.Lock()
 
 
 def _env() -> dict:
@@ -140,27 +144,32 @@ def deployd_changed(repo_path: str) -> bool:
     return paths_changed(repo_path, ["services/deployd/"])
 
 
-def deploy_shell_and_backend(repo_path: str, log: list[str]) -> int:
+def extract_vendor(log: list[str]) -> int:
     log.append(f"[{now_iso()}] extract vendor")
-    rc, out, err = run(["bash", f"{repo_path}/scripts/extract-vendor.sh"])
+    rc, out, err = run(["bash", f"{SHELL_DIR}/scripts/extract-vendor.sh"])
     log.append(out.rstrip())
     if err:
         log.append(f"stderr: {err.rstrip()}")
     if rc != 0:
         log.append(f"vendor extract failed: {rc}")
-        return rc
+    return rc
 
+
+def build_shell(log: list[str]) -> int:
     log.append(f"[{now_iso()}] build shell")
-    ui_dir = f"{repo_path}/late-web-ui"
+    ui_dir = f"{SHELL_DIR}/late-web-ui"
     rc, out, err = run(["bash", "-c", "npm run build"], cwd=ui_dir)
     log.append(out.rstrip())
     if err:
         log.append(f"stderr: {err.rstrip()}")
     if rc != 0:
         log.append(f"shell build failed: {rc}")
-        return rc
+    return rc
 
+
+def copy_shell_to_www(log: list[str]) -> int:
     log.append(f"[{now_iso()}] copy dist to /var/www/html")
+    ui_dir = f"{SHELL_DIR}/late-web-ui"
     rc, out, err = run(
         ["bash", "-c", "rm -rf /var/www/html/assets /var/www/html/index.html && cp -r dist/. /var/www/html/"],
         cwd=ui_dir,
@@ -170,20 +179,10 @@ def deploy_shell_and_backend(repo_path: str, log: list[str]) -> int:
         log.append(f"stderr: {err.rstrip()}")
     if rc != 0:
         log.append(f"copy failed: {rc}")
-        return rc
+    return rc
 
-    if chat_bridge_changed(repo_path):
-        log.append(f"[{now_iso()}] chat-bridge changed; restarting container")
-        rrc, rout, rerr = run(["bash", "/root/restart-chat-bridge.sh"])
-        log.append(rout.rstrip())
-        if rerr:
-            log.append(f"stderr: {rerr.rstrip()}")
-        if rrc != 0:
-            log.append(f"chat-bridge restart failed: {rrc}")
-            return rrc
-    else:
-        log.append(f"[{now_iso()}] chat-bridge not changed; skipping container restart")
 
+def reload_nginx(log: list[str]) -> int:
     log.append(f"[{now_iso()}] reload nginx")
     rc, out, err = run(["nginx", "-s", "reload"])
     log.append(out.rstrip())
@@ -191,7 +190,36 @@ def deploy_shell_and_backend(repo_path: str, log: list[str]) -> int:
         log.append(f"stderr: {err.rstrip()}")
     if rc != 0:
         log.append(f"nginx reload failed: {rc}")
-        return rc
+    return rc
+
+
+def restart_chat_bridge(log: list[str]) -> int:
+    log.append(f"[{now_iso()}] chat-bridge changed; restarting container")
+    rc, out, err = run(["bash", "/root/restart-chat-bridge.sh"])
+    log.append(out.rstrip())
+    if err:
+        log.append(f"stderr: {err.rstrip()}")
+    if rc != 0:
+        log.append(f"chat-bridge restart failed: {rc}")
+    return rc
+
+
+def deploy_shell_and_backend(repo_path: str, log: list[str]) -> int:
+    if extract_vendor(log) != 0:
+        return 1
+    if build_shell(log) != 0:
+        return 1
+    if copy_shell_to_www(log) != 0:
+        return 1
+
+    if chat_bridge_changed(repo_path):
+        if restart_chat_bridge(log) != 0:
+            return 1
+    else:
+        log.append(f"[{now_iso()}] chat-bridge not changed; skipping container restart")
+
+    if reload_nginx(log) != 0:
+        return 1
 
     if deployd_changed(repo_path):
         log.append(f"[{now_iso()}] deployd code changed; scheduling self-restart")
@@ -200,22 +228,49 @@ def deploy_shell_and_backend(repo_path: str, log: list[str]) -> int:
     return 0
 
 
-def deploy_micro_radio(repo_path: str, log: list[str]) -> int:
-    log.append(f"[{now_iso()}] build micro radio")
-    rc, out, err = run(["bash", f"/root/late.kodingvibes.com/scripts/build-micro-radio.sh"])
+def deploy_micro(micro_name: str, repo_path: str, build_script: str, log: list[str]) -> int:
+    log.append(f"[{now_iso()}] build micro {micro_name}")
+    rc, out, err = run(["bash", build_script])
     log.append(out.rstrip())
     if err:
         log.append(f"stderr: {err.rstrip()}")
-    return rc
+    if rc != 0:
+        log.append(f"micro {micro_name} build failed: {rc}")
+        return rc
+
+    # Micro is ready; rebuild shell so index.html gets new hashed assets.
+    # The shell's vite.config.ts points at /micro/{radio,chat}/latest, which is
+    # already updated by the build script above. Rebuilding the shell emits a
+    # fresh index.html with new asset hashes, busting browser caches.
+    log.append(f"[{now_iso()}] micro {micro_name} ready; rebuilding shell")
+    if extract_vendor(log) != 0:
+        return 1
+    if build_shell(log) != 0:
+        return 1
+    if copy_shell_to_www(log) != 0:
+        return 1
+    if reload_nginx(log) != 0:
+        return 1
+
+    return 0
+
+
+def deploy_micro_radio(repo_path: str, log: list[str]) -> int:
+    return deploy_micro(
+        "radio",
+        repo_path,
+        "/root/late.kodingvibes.com/scripts/build-micro-radio.sh",
+        log,
+    )
 
 
 def deploy_micro_chat(repo_path: str, log: list[str]) -> int:
-    log.append(f"[{now_iso()}] build micro chat")
-    rc, out, err = run(["bash", f"/root/late.kodingvibes.com/scripts/build-micro-chat.sh"])
-    log.append(out.rstrip())
-    if err:
-        log.append(f"stderr: {err.rstrip()}")
-    return rc
+    return deploy_micro(
+        "chat",
+        repo_path,
+        "/root/late.kodingvibes.com/scripts/build-micro-chat.sh",
+        log,
+    )
 
 
 DEPLOYERS = {
@@ -235,8 +290,10 @@ def run_deploy(repo_name: str, config: dict, after: str, delivery: Optional[str]
             logger.error("[%s] git pull failed for %s", delivery, repo_name)
             return
 
-        deploy_fn = DEPLOYERS[config["deploy"]]
-        rc = deploy_fn(config["path"], log)
+        # Any operation that touches /var/www/html/ must hold the global lock.
+        with WWW_LOCK:
+            rc = DEPLOYERS[config["deploy"]](config["path"], log)
+
         log.append(f"[{now_iso()}] deploy finished with code {rc}")
         write_deploy_log(repo_name, log)
         if rc == 0:
@@ -302,7 +359,6 @@ async def deploy_webhook(
 
     logger.info("accepted deploy %s @ %s (%s)", repo_name, after, x_github_delivery)
 
-    # Run deploy asynchronously so GitHub gets a 202 immediately.
     thread = threading.Thread(
         target=run_deploy,
         args=(repo_name, config, after, x_github_delivery),
