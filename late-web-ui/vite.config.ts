@@ -1,27 +1,46 @@
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import fs from "node:fs";
 import path from "node:path";
 
-// ponytail: microfront URLs are STABLE (no version in the path) so the
-// browser keeps the bundle in cache across deploys. Nginx serves
-// /micro/{radio,chat}/entry.js via a `latest` symlink that points at
-// the most recent version. New deploy replaces the symlink target;
-// the browser re-validates on next page load via ETag, no shell
-// redeploy required.
+interface LatestJson {
+  version?: string;
+  name?: string;
+}
+
+function readLatestVersion(name: "radio" | "chat"): string {
+  try {
+    const raw = fs.readFileSync(`/var/www/html/micro/${name}/latest.json`, "utf8");
+    const parsed = JSON.parse(raw) as LatestJson;
+    return parsed.version ?? "";
+  } catch {
+    return "";
+  }
+}
+
+// ponytail: microfront URLs include a ?v=<version> cache-bust query so Safari
+// (and any other immutable-cache browser) treats each deploy as a distinct
+// asset. The server symlink at /micro/{radio,chat}/latest/ still swaps the
+// underlying file; the query string only forces a fresh fetch after the shell
+// rebuilds. Nginx ignores query strings when serving static files.
 const microfrontsPlugin: Plugin = {
   name: "late-microfronts",
   transformIndexHtml: {
     order: "post",
     handler(html, ctx) {
       if (!ctx.filename.endsWith("index.html")) return html;
-      const radio = `/micro/radio/latest`;
-      const chat  = `/micro/chat/latest`;
+      const radioV = readLatestVersion("radio");
+      const chatV  = readLatestVersion("chat");
+      const radioBase = "/micro/radio/latest";
+      const chatBase  = "/micro/chat/latest";
+      const radioQ = radioV ? `?v=${encodeURIComponent(radioV)}` : "";
+      const chatQ  = chatV  ? `?v=${encodeURIComponent(chatV)}`  : "";
       const tags = [
-        `<link rel="stylesheet" href="${radio}/style.css">`,
-        `<link rel="stylesheet" href="${chat}/style.css">`,
-        `<script type="module" src="${radio}/entry.js"></script>`,
-        `<script type="module" src="${chat}/entry.js"></script>`,
+        `<link rel="stylesheet" href="${radioBase}/style.css${radioQ}">`,
+        `<link rel="stylesheet" href="${chatBase}/style.css${chatQ}">`,
+        `<script type="module" src="${radioBase}/entry.js${radioQ}"></script>`,
+        `<script type="module" src="${chatBase}/entry.js${chatQ}"></script>`,
       ].join("\n    ");
       return html.replace("</body>", `    ${tags}\n  </body>`);
     },

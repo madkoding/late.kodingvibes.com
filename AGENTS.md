@@ -118,7 +118,9 @@ late.kodingvibes.com/                (this repo, the shell)
 
 ## Versioning (microfronts)
 - Each micro has its own `version` field in `package.json`.
-- The build scripts create versioned directories plus a `latest` symlink and a `latest.json` marker (`/micro/radio/latest.json`, `/micro/chat/latest.json`). The shell uses `/micro/{radio,chat}/latest/entry.js` with a stable URL so the browser re-validates the symlink target on every deploy (nginx ETag), and `UpdateNotice` can detect upgrades while the user is already on the page without a full shell redeploy.
+- The build scripts create versioned directories plus a `latest` symlink and a `latest.json` marker (`/micro/radio/latest.json`, `/micro/chat/latest.json`).
+- The shell's `vite.config.ts` reads those `latest.json` files at build time and emits URLs like `/micro/radio/latest/entry.js?v=0.2.3`. The query string is a **cache-bust token**; nginx ignores it when serving the file. Safari (and other browsers with aggressive immutable caches) treat the changed query as a new URL and fetch the fresh bundle instead of reusing the old `entry.js` cached with `max-age=31536000, immutable`.
+- Because the query string changes on every shell rebuild that picks up a new micro version, the shell must be rebuilt after any micro deploy (see checklist). The `latest` symlink lets the server swap the underlying file without touching `index.html`.
 
 ### Update notice and content-cache cleanup
 - The shell's `UpdateNotice` polls `/version.json`, `/micro/radio/latest.json`, and `/micro/chat/latest.json` every 30 s.
@@ -127,6 +129,7 @@ late.kodingvibes.com/                (this repo, the shell)
   2. Removes `late.seen` (the UpdateNotice own version marker).
   3. Calls `location.reload()` so the browser fetches the latest `index.html`, `vendor/vendor.js`, `entry.js`, and CSS with no stale cached bundles.
 - The auto-deploy on the server is now responsible for swapping the `latest` symlink and updating `latest.json`; the front only needs to clear its own content caches and reload.
+- Safari/iOS historically keeps immutable HTTP-cache entries even after `caches.delete()`, so the `?v=` query string in `index.html` is the primary defense; the CacheStorage wipe is the secondary defense for PWA/offline caches.
 
 ## Deploy checklist (mandatory after EVERY change, no exceptions)
 1. Bump the relevant version: `APP_VERSION` (shell) or `version` (micro package.json).
